@@ -12,7 +12,7 @@ import scalismo.io.MeshIO
 import scalismo.utils.Random
 import breeze.linalg.DenseVector
 
-import java.io.File
+import java.io.{File, PrintWriter}
 
 /**
  * STAGE 2 -- NON-RIGID REGISTRATION.
@@ -55,6 +55,42 @@ object Stage2Registration {
     pdm: PointDistributionModel[_3D, TriangleMesh],
     lowRankGP: LowRankGaussianProcess[_3D, EuclideanVector[_3D]]
   )
+
+  /**
+   * Per-specimen registration quality, written to registration_metrics.csv. This is what lets you find WHICH
+   * specimen produced a bad fit (e.g. a stretched acromion/coracoid) instead of only seeing the symptom later,
+   * amplified, in a PCA mode of the finished SSM.
+   *
+   *   meanMm / rmsMm / hd95Mm / hdMaxMm  -- symmetric surface distance (both directions pooled, Metrics.symmetric)
+   *                                         between the non-rigidly fitted mesh and the rigidly-aligned target.
+   *                                         hd95Mm/hdMaxMm are always >= meanMm by construction (same pooled
+   *                                         distance distribution, just a higher percentile / the maximum).
+   *   volumeBeforeCm3 / volumeAfterCm3   -- signed volume (ScapulaData.signedVolume) of the rigid target and of the
+   *                                         fitted mesh. A large swing, or a sign flip, means the non-rigid step
+   *                                         folded or self-intersected the surface -- exactly the failure mode a
+   *                                         thin structure (acromion, coracoid, glenoid rim) is prone to.
+   *   orientationOk                      -- false if the fitted mesh's volume went negative or flipped sign.
+   */
+  final case class RegistrationRow(
+    specimen: String,
+    meanMm: Double,
+    rmsMm: Double,
+    hd95Mm: Double,
+    hdMaxMm: Double,
+    volumeBeforeCm3: Double,
+    volumeAfterCm3: Double,
+    volumeChangePct: Double,
+    orientationOk: Boolean
+  )
+
+  def evaluateRegistration(specimen: String, target: TriangleMesh[_3D], fitted: TriangleMesh[_3D]): RegistrationRow = {
+    val stats = Metrics.symmetric(fitted, target)
+    val volBefore = ScapulaData.signedVolume(target) / 1000.0
+    val volAfter = ScapulaData.signedVolume(fitted) / 1000.0
+    val volChangePct = (volAfter - volBefore) / volBefore * 100.0
+    val orientationOk = volAfter > 0 && math.signum(volBefore) == math.signum(volAfter)
+    RegistrationRow(specimen, stats.mean, stats.rms, stats.hd95, stats.hd, volBefore, volAfter, volChangePct, orientationOk)
+  }
 
   /** step 2: scalismo tutorial "Gaussian processes, kernels and PCA" -- multi-scale sum-of-Gaussians prior. */
   def buildGpModel(referenceMesh: TriangleMesh[_3D]): GpModel = {
@@ -139,8 +175,8 @@ object Stage2Registration {
     println(s"[Stage2] Gaussian process model rank: ${gpModel.pdm.rank}")
 
     val targets = cohort.filter(_.modelId != referenceSpecimen.modelId)
-    targets.zipWithIndex.foreach { case (s, i) =>
-      println(s"[Stage2] [${i + 1}/${targets.length}] registering ${s.modelId} ...")
+    val registrationRows = targets.zipWithIndex.map { case (s, i) =>
+      print(s"[Stage2] [${i + 1}/${targets.length}] registering ${s.modelId} ... ")
       val (rawMesh, rawLms) = canonical(s)
 
       // step 1a: landmark Procrustes (pose only).
@@ -150,10 +186,38 @@ object Stage2Registration {
       // step 2+3: GP-based non-rigid registration onto the reference topology.
       val fitted = registerNonRigidly(gpModel, referenceMesh, rigidMesh)
       MeshIO.writeMesh(fitted, new File(corrDir, s"${s.modelId}.stl")).get
+
+      val row = evaluateRegistration(s.modelId, rigidMesh, fitted)
+      val flag = if (!row.orientationOk) "  <-- ORIENTATION/VOLUME PROBLEM" else ""
+      println(f"mean=${row.meanMm}%.2fmm hd95=${row.hd95Mm}%.2fmm hdMax=${row.hdMaxMm}%.2fmm dVol=${row.volumeChangePct}%+.1f%%$flag")
+      row
     }
 
     // The reference itself is also a member of the training cohort, already in correspondence with itself.
     MeshIO.writeMesh(referenceMesh, new File(corrDir, s"${referenceSpecimen.modelId}.stl")).get
+
+    // ---- registration quality CSV: which specimen(s), if any, produced a bad non-rigid fit ------------------------
+    val metricsCsv = new File(outDir, "registration_metrics.csv")
+    val pw = new PrintWriter(metricsCsv)
+    try {
+      pw.println("specimen,mean_mm,rms_mm,hd95_mm,hd_max_mm,volume_before_cm3,volume_after_cm3,volume_change_pct,orientation_ok")
+      registrationRows.foreach { r =>
+        pw.println(
+          s"${r.specimen},${r.meanMm},${r.rmsMm},${r.hd95Mm},${r.hdMaxMm},${r.volumeBeforeCm3},${r.volumeAfterCm3},${r.volumeChangePct},${r.orientationOk}"
+        )
+      }
+    } finally pw.close()
+    println(s"[Stage2] Registration metrics written to ${metricsCsv.getAbsolutePath}")
+
+    val badOrientation = registrationRows.filterNot(_.orientationOk)
+    val worstByHd95 = registrationRows.sortBy(-_.hd95Mm).take(3)
+    if (badOrientation.nonEmpty) {
+      println(s"[Stage2] !! ${badOrientation.length} specimen(s) failed the orientation/volume check: " +
+        badOrientation.map(_.specimen).mkString(", "))
+      println("[Stage2]    The fitted mesh folded or self-intersected -- inspect these first, they are the most")
+      println("[Stage2]    likely cause of an implausible PCA mode (e.g. a stretched acromion/coracoid at +/-3 sigma).")
+    }
+    println(s"[Stage2] Worst 3 specimens by HD95: " + worstByHd95.map(r => f"${r.specimen} (${r.hd95Mm}%.2fmm)").mkString(", "))
 
     println(s"[Stage2] Done. ${cohort.length} corresponded meshes written to ${corrDir.getAbsolutePath}")
     println("[Stage2] Next: run Stage3BuildModel to build the statistical shape model.")

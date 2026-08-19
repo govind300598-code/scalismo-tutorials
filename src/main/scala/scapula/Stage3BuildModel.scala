@@ -87,19 +87,45 @@ object Stage3BuildModel {
     println("  (roughly > 60-70%) usually means a correspondence artifact at one thin/hard-to-register structure,")
     println("  not genuine population shape variance -- do not trust +/-3 sigma visualizations of that mode until")
     println("  the flagged points are checked (e.g. against the acromion/coracoid tip, glenoid rim).")
-    (0 until math.min(3, ssm.gp.klBasis.length)).foreach { i =>
+    final case class ConcentrationSummary(mode: Int, top20SharePct: Double, suspicious: Boolean)
+    final case class ConcentrationPoint(mode: Int, rank: Int, pointId: Int, x: Double, y: Double, z: Double, sharePct: Double)
+
+    val concModes = 0 until math.min(3, ssm.gp.klBasis.length)
+    val concSummaries = scala.collection.mutable.ArrayBuffer.empty[ConcentrationSummary]
+    val concPoints = scala.collection.mutable.ArrayBuffer.empty[ConcentrationPoint]
+
+    concModes.foreach { i =>
       val eigenpair = ssm.gp.klBasis(i)
       val perPointEnergy = eigenpair.eigenfunction.data.map(_.norm2).toIndexedSeq
       val total = perPointEnergy.sum
       val ranked = perPointEnergy.zipWithIndex.sortBy { case (e, _) => -e }
       val top20Share = ranked.take(20).map(_._1).sum / total
-      val flag = if (top20Share > 0.6) "  <-- SUSPICIOUS: likely correspondence noise, not real shape variance" else ""
+      val suspicious = top20Share > 0.6
+      val flag = if (suspicious) "  <-- SUSPICIOUS: likely correspondence noise, not real shape variance" else ""
       println(f"  mode ${i + 1}: top-20 points carry ${top20Share * 100}%5.1f%% of this mode's variance$flag")
-      ranked.take(5).foreach { case (e, idx) =>
+      concSummaries += ConcentrationSummary(i + 1, top20Share * 100, suspicious)
+      ranked.take(5).zipWithIndex.foreach { case ((e, idx), rank) =>
         val p = referenceMesh.pointSet.point(PointId(idx))
-        println(f"      point $idx%5d at (${p.x}%7.1f, ${p.y}%7.1f, ${p.z}%7.1f) mm  -- ${e / total * 100}%5.1f%% of mode variance")
+        val sharePct = e / total * 100
+        println(f"      point $idx%5d at (${p.x}%7.1f, ${p.y}%7.1f, ${p.z}%7.1f) mm  -- $sharePct%5.1f%% of mode variance")
+        concPoints += ConcentrationPoint(i + 1, rank + 1, idx, p.x, p.y, p.z, sharePct)
       }
     }
+
+    val concSummaryCsv = new File(outDir, "mode_concentration_summary.csv")
+    val pwConcSummary = new PrintWriter(concSummaryCsv)
+    try {
+      pwConcSummary.println("mode,top20_share_pct,suspicious")
+      concSummaries.foreach(s => pwConcSummary.println(s"${s.mode},${s.top20SharePct},${s.suspicious}"))
+    } finally pwConcSummary.close()
+
+    val concPointsCsv = new File(outDir, "mode_concentration_points.csv")
+    val pwConcPoints = new PrintWriter(concPointsCsv)
+    try {
+      pwConcPoints.println("mode,rank,point_id,x_mm,y_mm,z_mm,share_pct")
+      concPoints.foreach(p => pwConcPoints.println(s"${p.mode},${p.rank},${p.pointId},${p.x},${p.y},${p.z},${p.sharePct}"))
+    } finally pwConcPoints.close()
+    println(s"[Stage3] Mode concentration data written to ${concSummaryCsv.getName} / ${concPointsCsv.getName}")
 
     val maxModes = math.min(6, ssm.rank)
 
