@@ -1,6 +1,7 @@
 package scapula
 
 import scalismo.geometry.*
+import scalismo.common.PointId
 import scalismo.mesh.*
 import scalismo.statisticalmodel.*
 import scalismo.statisticalmodel.dataset.DataCollection
@@ -72,6 +73,32 @@ object Stage3BuildModel {
       println(
         f"  mode ${i + 1}%2d  var=${eigenvalues(i)}%9.2f mm^2 (${eigenvalues(i) / totalVar * 100}%5.1f%%)  cum=${cumVar(i) * 100}%5.1f%%"
       )
+    }
+
+    // ---- Mode concentration: is each mode a real, whole-bone shape pattern, or noise parked at a handful of
+    // points (typically a thin, hard-to-register structure like the acromion or coracoid tip)? A PCA mode built
+    // from very few specimens can "explain" a lot of variance just by chasing a correspondence error at one
+    // vertex; visualizing that mode at +/-3 sigma then produces a spike/fork exactly there while the rest of the
+    // bone looks fine. This computes, per mode, how much of its variance is carried by its 20 most-displaced
+    // points, and prints where those points are so they can be checked against the reference mesh.
+    println("\n[Stage3] Mode concentration diagnostic (modes 1..3)")
+    println("  top-20 share = fraction of that mode's variance carried by its 20 highest-displacement points.")
+    println("  A real, whole-bone shape mode should be well under 50%. A mode dominated by a handful of points")
+    println("  (roughly > 60-70%) usually means a correspondence artifact at one thin/hard-to-register structure,")
+    println("  not genuine population shape variance -- do not trust +/-3 sigma visualizations of that mode until")
+    println("  the flagged points are checked (e.g. against the acromion/coracoid tip, glenoid rim).")
+    (0 until math.min(3, ssm.gp.klBasis.length)).foreach { i =>
+      val eigenpair = ssm.gp.klBasis(i)
+      val perPointEnergy = eigenpair.eigenfunction.data.map(_.norm2).toIndexedSeq
+      val total = perPointEnergy.sum
+      val ranked = perPointEnergy.zipWithIndex.sortBy { case (e, _) => -e }
+      val top20Share = ranked.take(20).map(_._1).sum / total
+      val flag = if (top20Share > 0.6) "  <-- SUSPICIOUS: likely correspondence noise, not real shape variance" else ""
+      println(f"  mode ${i + 1}: top-20 points carry ${top20Share * 100}%5.1f%% of this mode's variance$flag")
+      ranked.take(5).foreach { case (e, idx) =>
+        val p = referenceMesh.pointSet.point(PointId(idx))
+        println(f"      point $idx%5d at (${p.x}%7.1f, ${p.y}%7.1f, ${p.z}%7.1f) mm  -- ${e / total * 100}%5.1f%% of mode variance")
+      }
     }
 
     val maxModes = math.min(6, ssm.rank)
