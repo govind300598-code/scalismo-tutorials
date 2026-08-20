@@ -64,7 +64,7 @@ object ScapulaData {
     val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
     files
       .filter(_.getName.toLowerCase.endsWith(".csv"))
-      .filter(f => f.getName.toLowerCase.contains("scapula") && f.getName.toLowerCase.contains("model_data"))
+      .filter(_.getName.toLowerCase.contains("model_data"))
       .filterNot(_.getName.toLowerCase.startsWith("single"))
       .sortBy(_.getName)
       .headOption
@@ -140,11 +140,20 @@ object ScapulaData {
       .toIndexedSeq
       .map { f =>
         val id = f.getName.stripSuffix(".stl")
-        Specimen(id, f, id.endsWith("_R"), subjectKey(id))
+        Specimen(id, f, isRightSide(id), subjectKey(id))
       }
   }
 
-  def subjectKey(modelId: String): String = modelId.stripSuffix("_L").stripSuffix("_R")
+  // Handles: ..._R, ..._R_Scapula, ..._R_scapula (all dataset naming conventions)
+  def isRightSide(modelId: String): Boolean = {
+    val upper = modelId.toUpperCase
+    upper.endsWith("_R") || upper.endsWith("_R_SCAPULA")
+  }
+
+  def subjectKey(modelId: String): String = {
+    val stripped = modelId.replaceAll("(?i)_scapula$", "")
+    stripped.stripSuffix("_L").stripSuffix("_R")
+  }
 
   // ---------------------------------------------------------------------------
   // Mirroring.
