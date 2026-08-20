@@ -20,8 +20,11 @@ object Config {
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
-  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution.
+   *  5000 is too few for a scapula: the acromion/coracoid tip gets only ~10-30 vertices after decimation,
+   *  which makes mode concentration flag those structures as suspicious correspondence artifacts even when
+   *  the registration is correct. Use 15000 as the minimum for reliable thin-structure correspondence. */
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "15000").toInt
 
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt

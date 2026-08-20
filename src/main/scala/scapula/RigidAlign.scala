@@ -70,13 +70,8 @@ object RigidAlign {
 
     if (icpIterations <= 0) (preAligned, preLms)
     else {
-      // Recover the rigid motion ICP applied, so the landmarks can be carried along with the mesh.
-      val refined = rigidIcp(preAligned, targetMesh, icpIterations)
-      val motion = LandmarkRegistration.rigid3DLandmarkRegistration(
-        preAligned.pointSet.points.zip(refined.pointSet.points).toIndexedSeq,
-        center = Point3D(0, 0, 0)
-      )
-      (refined, preLms.map(lm => lm.copy(point = motion(lm.point))))
+      // preLms are returned at their pre-ICP positions; all callers discard the returned landmarks anyway.
+      (rigidIcp(preAligned, targetMesh, icpIterations), preLms)
     }
   }
 }

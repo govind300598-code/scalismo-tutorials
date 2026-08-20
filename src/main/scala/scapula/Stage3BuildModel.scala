@@ -152,7 +152,7 @@ object Stage3BuildModel {
     println(s"\n[Stage3] Evaluating specificity (modes 1..$maxModes)...")
     val specRmse = (1 to maxModes).map { numModes =>
       val trunc = ssm.truncate(numModes)
-      val errors = (0 until 30).map { _ =>
+      val errors = (0 until 1000).map { _ =>
         val sample = trunc.sample()
         corresponded.map { case (_, m) => pointToPointRMSE(sample, m) }.min
       }
