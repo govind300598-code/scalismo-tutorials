@@ -92,7 +92,7 @@ object Stage3BuildModel {
     println("[Mode concentration] Fraction of mode variance in the top-20 highest-displacement vertices")
     println("  A ratio > 0.60 on mode 1 suggests a single thin structure dominates the mode.")
     model.gp.klBasis.zipWithIndex.take(5).foreach { case (basis, i) =>
-      val displacements = basis.eigenfunction.pointsWithValues.map { case (_, v) => v.norm2 }.toIndexedSeq
+      val displacements = model.referenceMesh.pointSet.points.map(pt => basis.eigenfunction(pt).norm2).toIndexedSeq
       val total = displacements.sum
       val sorted = displacements.sorted.reverse
       val topKSum = sorted.take(topK).sum

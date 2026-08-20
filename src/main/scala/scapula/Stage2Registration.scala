@@ -5,7 +5,6 @@ import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.*
 import scalismo.io.{MeshIO, StatisticalModelIO}
-import scalismo.numerics.PivotedCholesky
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
 import scalismo.utils.Random
 
@@ -62,11 +61,8 @@ object Stage2Registration {
       interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
 
-    // Honour the rank cap so memory and per-iteration cost stay bounded.
-    val cappedBasisVectors = lowRankGp.klBasis.take(Config.gpMaxRank)
-    val cappedGp = LowRankGaussianProcess[_3D, EuclideanVector[_3D]](lowRankGp.mean, cappedBasisVectors)
-
-    PointDistributionModel[_3D, TriangleMesh](reference, cappedGp)
+    println(s"  GP rank: ${lowRankGp.rank}  (set SCAPULA_GP_TOL higher to reduce)")
+    PointDistributionModel[_3D, TriangleMesh](reference, lowRankGp)
   }
 
   // ── GP-ICP ────────────────────────────────────────────────────────────────
