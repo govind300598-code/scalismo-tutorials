@@ -47,6 +47,21 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  // ── Objective 1: FFDM prior model ─────────────────────────────────────────
+
+  /**
+   * Kernel specification for the FFDM prior, as a comma-separated list of "sigma:scale" pairs (mm).
+   * Each pair adds one Gaussian component; multi-scale mixtures handle both local and global modes.
+   * Example: "10:5,50:20" → two-scale kernel.
+   */
+  val ffdmKernelSpec: String = env("SCAPULA_FFDM_KERNEL", "10:5,30:10,80:30")
+
+  /**
+   * Explicit reference specimen ID (without .stl).
+   * Leave empty ("") to auto-select via volume-median heuristic.
+   */
+  val ffdmReferenceId: String = env("SCAPULA_FFDM_REF", "")
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
