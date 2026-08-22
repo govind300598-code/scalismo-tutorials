@@ -4,7 +4,7 @@ import scalismo.common.Field
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.io.{MeshIO, StatisticalModelIO}
-import scalismo.kernels.{DiagonalKernel, GaussianKernel, MatrixValuedPDKernel, PDKernel}
+import scalismo.kernels.{DiagonalKernel3D, GaussianKernel, MatrixValuedPDKernel, PDKernel}
 import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel3D}
 import scalismo.utils.Random
@@ -267,16 +267,18 @@ object Stage2BuildFFDM {
       components
         .map { case (sigma, scale) => GaussianKernel[_3D](sigma) * (scale * scale) }
         .reduce[PDKernel[_3D]](_ + _)
-    val vectorKernel: MatrixValuedPDKernel[_3D] = DiagonalKernel(scalarKernel, 3)
+    val vectorKernel: MatrixValuedPDKernel[_3D] = DiagonalKernel3D(scalarKernel, outputDim = 3)
     GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, vectorKernel)
   }
 
   /** Pivoted-Cholesky low-rank approximation of the GP on the reference mesh. */
+  // Pass the MESH (not ref.pointSet) as domain — required for NearestNeighborInterpolator3D
+  // to resolve correctly. Confirmed by D.Madsen (Scalismo forum, Jun 2024).
   def approximateGP(ref: TriangleMesh[_3D],
                     gp: GaussianProcess[_3D, EuclideanVector[_3D]]
   ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] =
     LowRankGaussianProcess.approximateGPCholesky(
-      ref.pointSet,
+      ref,
       gp,
       relativeTolerance = Config.gpRelativeTolerance,
       interpolator       = NearestNeighborInterpolator3D[EuclideanVector[_3D]]()
