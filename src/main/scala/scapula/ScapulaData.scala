@@ -17,8 +17,19 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  val dataDir: File = sys.env.get("SCAPULA_DATA_DIR").map(new File(_)).getOrElse {
+    val home = System.getProperty("user.home")
+    Seq(
+      new File(home, "Documents/100 plus scapula data/paired_scapulae_STLs_scapula"),
+      new File(home, "Documents/database_v1.11/paired_scapulae_STLs"),
+      new File(home, "Documents/paired_scapulae_STLs"),
+      new File("/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs")
+    ).find(f => f.exists() && f.isDirectory)
+     .getOrElse(new File(home, "Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
+  }
+
+  val outDir: File = sys.env.get("SCAPULA_OUT_DIR").map(new File(_))
+    .getOrElse(new File(dataDir.getParentFile, "scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
