@@ -8,21 +8,25 @@ import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
 import scalismo.utils.Random
 
+/** Reusable GP-ICP non-rigid registration pipeline for a single target. */
 object ScapulaGPPipeline {
 
+  /** Default GP prior: isotropic Gaussian kernel, σ = 75 mm, amplitude = 12 mm, rank capped via Cholesky. */
   def defaultGP: GaussianProcess[_3D, EuclideanVector[_3D]] =
     GaussianProcess[_3D, EuclideanVector[_3D]](
       DiagonalKernel(GaussianKernel[_3D](75.0) * 12.0, 3))
 
   /**
-   * GP-ICP non-rigid registration.
+   * Register alignedRef to target using GP-ICP.
    *
-   * alignedRef must already be rigidly aligned to the target before calling this.
+   * alignedRef must already be rigidly aligned to target before calling this.
    *
-   * The first argument to approximateGPCholesky must be a DiscreteDomain[_3D].
-   * TriangleMesh[_3D] satisfies that — pass alignedRef directly.
-   * alignedRef.pointSet returns UnstructuredPoints[_3D], which is NOT a DiscreteDomain
-   * and causes a compile-time type-mismatch error.
+   * Type note — the first arg to approximateGPCholesky must be a DiscreteDomain[_3D]:
+   *   TriangleMesh[_3D]       implements DiscreteDomain[_3D]  → pass alignedRef ✓
+   *   alignedRef.pointSet     returns UnstructuredPoints[_3D]
+   *                           which does NOT implement DiscreteDomain in Scalismo 0.92 → E007 ✗
+   *
+   * @return (posterior model, model.mean — the registered surface)
    */
   def register(
     alignedRef: TriangleMesh[_3D],
@@ -34,8 +38,11 @@ object ScapulaGPPipeline {
     sigma2: Double = 1.0
   )(implicit rng: Random): (PointDistributionModel[_3D, TriangleMesh], TriangleMesh[_3D]) = {
 
+    // approximateGPCholesky[D, DDomain[D] <: DiscreteDomain[D], Value]
+    // NearestNeighborInterpolator3D is FieldInterpolator[_3D, DiscreteDomain, EuclideanVector[_3D]],
+    // contravariant-compatible with FieldInterpolator[_3D, TriangleMesh, EuclideanVector[_3D]].
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-      alignedRef,         // TriangleMesh[_3D] is a DiscreteDomain[_3D] — correct
+      alignedRef,
       gp,
       relativeTolerance = gpTolerance,
       interpolator = NearestNeighborInterpolator3D()
@@ -48,7 +55,7 @@ object ScapulaGPPipeline {
 
     for (_ <- 0 until iterations) {
       val mean = model.mean
-      val correspondences = ptIds.flatMap { pid =>
+      val correspondences: IndexedSeq[(PointId, Point[_3D])] = ptIds.flatMap { pid =>
         val pt      = mean.pointSet.point(pid)
         val nearest = target.operations.closestPointOnSurface(pt).point
         if ((nearest - pt).norm < maxCorrDist) Some((pid, nearest)) else None
