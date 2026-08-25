@@ -86,7 +86,7 @@ object ScapulaGPPipeline:
     //  One scalar Gaussian kernel, scaled by amplitude, then extended to 3-D output
     //  via a diagonal matrix kernel.  This is intentionally ONE kernel: no combinations.
     val scalarKernel = GaussianKernel[_3D](sigma) * scaleFactor
-    val kernel       = DiagonalKernel[_3D](scalarKernel, outputDimensionality = 3)
+    val kernel       = DiagonalKernel[_3D](scalarKernel, outputDim = 3)
 
     //  Zero-mean Gaussian process over 3-D displacement fields
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](kernel)
