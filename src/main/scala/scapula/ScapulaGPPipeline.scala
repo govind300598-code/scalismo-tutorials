@@ -1,16 +1,13 @@
 package scapula
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  ScapulaGPPipeline — 5-step scapula GP pipeline
+//  HOW TO RUN (copy-paste into your terminal):
 //
-//  Terminal command (run from the project root folder):
+//    cd /home/g25upadh/Downloads/scalismo        ← your project folder
 //    sbt "runMain scapula.ScapulaGPPipeline"
 //
-//  Prerequisites:
-//    1. Java 11+  →  java -version
-//    2. sbt       →  sbt --version
-//    3. The data directory, CSV, and STL files must already exist at the
-//       paths set in the PARAMETERS block below.
+//  First run downloads dependencies (~2 min). Subsequent runs are fast.
+//  The viewer window opens at the end — close it to exit.
 // ══════════════════════════════════════════════════════════════════════════════
 
 import scalismo.geometry.*
@@ -23,136 +20,185 @@ import scalismo.registration.LandmarkRegistration
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 import java.io.File
+import scala.io.Source
+import scala.util.Using
 
 object ScapulaGPPipeline:
 
   // ╔══════════════════════════════════════════════════════════════════════════╗
-  // ║  PARAMETERS — change ONLY these values, then run with sbt               ║
+  // ║  SET THESE PATHS BEFORE RUNNING                                         ║
   // ╚══════════════════════════════════════════════════════════════════════════╝
 
-  // Folder that contains the .stl files AND the landmark CSV
-  val dataDir: String = "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"
+  // Folder containing the .stl files and the landmark CSV file
+  val dataDir      = "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"
 
-  // Model ID of the reference specimen (must match the first column in the CSV)
-  val refId: String   = "paired_scapula_001_M_64_L"
+  // Model ID of the reference — must match the first column of the CSV exactly
+  val refId        = "paired_scapula_001_M_64_L"
 
-  // Model ID of the target specimen (must match the first column in the CSV)
-  val tgtId: String   = "paired_scapula_001_M_64_R"
+  // Model ID of the target — the reference is rigidly aligned toward this
+  val tgtId        = "paired_scapula_001_M_64_R"
 
-  // Where to write the saved GP model; the parent directory must exist
-  val outputH5: String = "/home/g25upadh/Documents/scapula_gp.h5"
+  // Where the .h5 model file will be saved (parent folder must exist)
+  val outputH5     = "/home/g25upadh/Documents/scapula_gp.h5"
 
-  // Gaussian kernel width in mm: larger = smoother, longer-range deformations
-  val sigma: Double = 50.0
+  // Gaussian kernel width in mm — larger means smoother, longer-range modes
+  val sigma        = 50.0
 
-  // Gaussian kernel amplitude: larger = bigger displacements in each mode
-  val scale: Double = 100.0
+  // Gaussian kernel amplitude — larger means bigger displacements per mode
+  val scale        = 100.0
 
-  // Number of deformation modes (basis functions) shown as viewer sliders
-  val gpRank: Int = 5
+  // Number of deformation modes; exactly 5 sliders will appear in the viewer
+  val gpRank       = 5
 
-  // ══════════════════════════════════════════════════════════════════════════════
-  //  PIPELINE  — nothing below this line needs editing
-  // ══════════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PIPELINE — nothing below needs changing
+  // ══════════════════════════════════════════════════════════════════════════
 
   def main(args: Array[String]): Unit =
-
     scalismo.initialize()
     implicit val rng: Random = Random(42L)
 
-    val dir = new File(dataDir)
-    require(dir.exists(), s"Data directory not found: $dataDir")
+    // ── Step 1: Load meshes and landmarks from CSV ─────────────────────────
+    println("\n[1/5] Loading meshes and landmarks...")
 
-    // ── Step 1: Load meshes and landmarks from CSV ─────────────────────────────
-    println("\n[Step 1] Loading meshes and landmarks...")
+    val dir = new File(dataDir)
+    require(dir.exists() && dir.isDirectory, s"Data folder not found:\n  $dataDir")
 
     val refFile = new File(dir, s"$refId.stl")
     val tgtFile = new File(dir, s"$tgtId.stl")
-    require(refFile.exists(), s"Reference STL not found: ${refFile.getPath}")
-    require(tgtFile.exists(), s"Target STL not found: ${tgtFile.getPath}")
+    require(refFile.exists(), s"STL not found: ${refFile.getPath}")
+    require(tgtFile.exists(), s"STL not found: ${tgtFile.getPath}")
 
     val refMesh = MeshIO.readMesh(refFile)
-      .getOrElse(sys.error(s"Could not read reference mesh: ${refFile.getPath}"))
+      .getOrElse(sys.error(s"Cannot load mesh: ${refFile.getPath}"))
     val tgtMesh = MeshIO.readMesh(tgtFile)
-      .getOrElse(sys.error(s"Could not read target mesh: ${tgtFile.getPath}"))
+      .getOrElse(sys.error(s"Cannot load mesh: ${tgtFile.getPath}"))
 
-    // Read all landmarks from the CSV that lives in the same folder
-    val csvFile = ScapulaData.csvFile(dir)
-    val (allLandmarks, fromHeader, _) = ScapulaData.readLandmarkCsv(csvFile)
-    if (!fromHeader)
-      println("  WARNING: landmark columns resolved by fallback offsets, not header names.")
+    // Find the landmark CSV automatically (any *scapula*model_data*.csv in the folder)
+    val csvOpt = Option(dir.listFiles())
+      .getOrElse(Array.empty)
+      .filter(f => f.getName.toLowerCase.endsWith(".csv")
+                && f.getName.toLowerCase.contains("scapula")
+                && f.getName.toLowerCase.contains("model_data"))
+      .sortBy(_.getName)
+      .headOption
+    val csvFile = csvOpt.getOrElse(sys.error(
+      s"No *scapula*model_data*.csv found in $dataDir"))
 
-    val refLms = allLandmarks.getOrElse(refId,
-      sys.error(s"No CSV row found for reference id '$refId' in ${csvFile.getName}"))
-    val tgtLms = allLandmarks.getOrElse(tgtId,
-      sys.error(s"No CSV row found for target id '$tgtId' in ${csvFile.getName}"))
+    val refLms = landmarksFromCsv(csvFile, refId)
+    val tgtLms = landmarksFromCsv(csvFile, tgtId)
 
-    println(s"  Landmark CSV   : ${csvFile.getName}")
-    println(s"  Reference mesh : ${refMesh.pointSet.numberOfPoints} vertices  (${refFile.getName})")
-    println(s"  Target mesh    : ${tgtMesh.pointSet.numberOfPoints} vertices  (${tgtFile.getName})")
+    println(s"  CSV            : ${csvFile.getName}")
+    println(s"  Reference mesh : ${refMesh.pointSet.numberOfPoints} vertices")
+    println(s"  Target mesh    : ${tgtMesh.pointSet.numberOfPoints} vertices")
     println(s"  Landmarks      : ${refLms.size}  (${refLms.map(_.id).mkString(", ")})")
 
-    // ── Step 2: Rigid registration using landmarks ─────────────────────────────
-    println("\n[Step 2] Rigid landmark alignment...")
+    // ── Step 2: Rigid alignment using landmarks ────────────────────────────
+    println("\n[2/5] Rigid landmark alignment...")
 
-    // Pair landmarks by matching IDs so order in the CSV does not matter
-    val sharedIds  = refLms.map(_.id).toSet & tgtLms.map(_.id).toSet
-    require(sharedIds.nonEmpty, "No common landmark IDs between reference and target.")
+    // Build (moving, fixed) point pairs matched by landmark ID
+    val commonIds = refLms.map(_.id).toSet.intersect(tgtLms.map(_.id).toSet)
+    require(commonIds.nonEmpty, "No shared landmark IDs between reference and target.")
 
     val pairs: IndexedSeq[(Point[_3D], Point[_3D])] =
-      sharedIds.toIndexedSeq.sorted.map { id =>
-        val rp = refLms.find(_.id == id).get.point
-        val tp = tgtLms.find(_.id == id).get.point
-        (rp, tp)
+      commonIds.toIndexedSeq.sorted.map { id =>
+        refLms.find(_.id == id).get.point -> tgtLms.find(_.id == id).get.point
       }
 
-    val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(pairs, center = Point3D(0, 0, 0))
-    val alignedRef  = refMesh.transform(rigidTrans)
-    println(s"  Done — ${sharedIds.size} landmark pairs used.")
+    val rigidTrans = LandmarkRegistration.rigid3DLandmarkRegistration(
+      pairs,
+      center = Point3D(0.0, 0.0, 0.0)
+    )
+    val alignedRef = refMesh.transform(rigidTrans)
+    println(s"  Done — ${commonIds.size} landmark pairs used.")
 
-    // ── Step 3: Single Gaussian kernel GP model, rank 5 ───────────────────────
-    println(s"\n[Step 3] Building GP model  (sigma=$sigma mm, scale=$scale, rank=$gpRank)...")
+    // ── Step 3: GP model — one Gaussian kernel, rank 5 ────────────────────
+    println(s"\n[3/5] Building GP model  (sigma=$sigma, scale=$scale, rank=$gpRank)...")
 
-    // Zero-mean field — no preferred deformation direction
     val zeroMean: Field[_3D, EuclideanVector[_3D]] =
       Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector3D(0.0, 0.0, 0.0))
 
-    // One Gaussian scalar kernel, promoted to a 3-D diagonal matrix kernel
-    val scalarKernel = GaussianKernel[_3D](sigma) * scale
-    val matrixKernel = DiagonalKernel(scalarKernel, 3)
+    val matrixKernel = DiagonalKernel(GaussianKernel[_3D](sigma) * scale, 3)
 
     val gp = GaussianProcess(zeroMean, matrixKernel)
 
-    // Nystrom approximation on the aligned reference mesh
-    val interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
-    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(
+    val lowRankGP = LowRankGaussianProcess.approximateGPNystrom(
       gp,
       alignedRef,
       numBasisFunctions = gpRank,
-      interpolator = interpolator
+      interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
 
     val model = PointDistributionModel(alignedRef, lowRankGP)
-    println(s"  GP model built.  Rank = ${model.rank}")
+    println(s"  Done — model rank = ${model.rank}")
 
-    // ── Step 4: Save GP model as .h5 ──────────────────────────────────────────
-    println(s"\n[Step 4] Saving model  →  $outputH5")
+    // ── Step 4: Save as .h5 ───────────────────────────────────────────────
+    println(s"\n[4/5] Saving model  →  $outputH5")
+    val h5 = new File(outputH5)
+    h5.getParentFile.mkdirs()
+    StatismoIO.writeStatismoMeshModel(model, h5) match
+      case scala.util.Success(_)  => println("  Saved.")
+      case scala.util.Failure(ex) => sys.error(s"Save failed: ${ex.getMessage}")
 
-    val h5File = new File(outputH5)
-    h5File.getParentFile.mkdirs()   // create parent directory if it does not exist
+    // ── Step 5: Viewer — one slider per mode ──────────────────────────────
+    println(s"\n[5/5] Opening viewer  (${model.rank} deformation modes)...")
+    println("  Drag a slider to deform the shape along that mode.")
+    println("  Close the viewer window to exit.\n")
 
-    StatismoIO.writeStatismoMeshModel(model, h5File) match
-      case scala.util.Success(_)  => println("  Saved OK.")
-      case scala.util.Failure(ex) => sys.error(s"Failed to save .h5: ${ex.getMessage}")
+    val ui = ScalismoUI()
+    ui.show(ui.createGroup("Scapula GP"), model, "gp_model")
 
-    // ── Step 5: Open viewer and show all 5 deformation modes ──────────────────
-    println("\n[Step 5] Opening Scalismo viewer...")
-    println("  One slider appears per mode (0 – 4).")
-    println("  Drag a slider to deform the mesh along that mode, then take a screenshot.")
-    println("  Close the viewer window to exit the program.\n")
+  // ── CSV helper — reads landmarks for one specimen from the project CSV ────
+  //
+  //  The CSV must have:
+  //    • Column 0 : model ID  (e.g. paired_scapula_001_M_64_L)
+  //    • A header row whose column names contain each landmark name followed
+  //      by x / y / z  (e.g. "GC_x", "GCx", "gc x" all normalise the same)
+  //    • Landmark names searched: GC, TS, IA, PLA, AC
+  //    • Fallback column offsets used when header matching fails:
+  //      GC→11, TS→14, IA→17, PLA→20, AC→23  (adjust if your CSV differs)
+  private def landmarksFromCsv(csv: File, modelId: String): IndexedSeq[Landmark[_3D]] =
+    Using.resource(Source.fromFile(csv)) { src =>
+      val lines  = src.getLines().toIndexedSeq.filter(_.trim.nonEmpty)
+      require(lines.length > 1, s"CSV has no data rows: ${csv.getName}")
 
-    val ui    = ScalismoUI()
-    val group = ui.createGroup("Scapula GP")
-    ui.show(group, model, "gp_model")
+      val rawHeader = lines.head.split(",", -1).toIndexedSeq
+      // Normalise: strip everything except letters and digits, lowercase
+      val normHeader = rawHeader.map(_.trim.toLowerCase.replaceAll("[^a-z0-9]", ""))
 
-    // The JVM stays alive until the viewer window is closed.
+      val lmNames     = Seq("GC", "TS", "IA", "PLA", "AC")
+      val fallbackCol = Map("GC" -> 11, "TS" -> 14, "IA" -> 17, "PLA" -> 20, "AC" -> 23)
+
+      // For each landmark find the x,y,z column indices
+      val colTriples: Seq[(String, Int, Int, Int)] = lmNames.map { lm =>
+        val l = lm.toLowerCase
+        def findCol(axis: Char): Int =
+          normHeader.indexWhere { h =>
+            h == s"$l$axis" ||
+            (h.startsWith(l) && h.endsWith(axis.toString) && h.length <= l.length + 2)
+          }
+        val xi = findCol('x')
+        val yi = findCol('y')
+        val zi = findCol('z')
+        if (xi >= 0 && yi >= 0 && zi >= 0) (lm, xi, yi, zi)
+        else {
+          val fb = fallbackCol(lm)
+          println(s"  [CSV] Header match failed for '$lm' — using fallback columns ($fb, ${fb+1}, ${fb+2}).")
+          (lm, fb, fb + 1, fb + 2)
+        }
+      }
+
+      val row = lines.tail
+        .find(_.split(",", -1)(0).trim == modelId)
+        .getOrElse(sys.error(
+          s"Model ID '$modelId' not found in ${csv.getName}.\n" +
+          s"  First 3 IDs in file: ${lines.tail.take(3).map(_.split(",", -1)(0).trim).mkString(", ")}"))
+
+      val cells = row.split(",", -1).map(_.trim)
+
+      colTriples.map { case (lm, xi, yi, zi) =>
+        require(cells.length > math.max(xi, math.max(yi, zi)),
+          s"Row for '$modelId' has too few columns for landmark $lm (need col ${math.max(xi, math.max(yi, zi))} but only ${cells.length} columns).")
+        Landmark(lm, Point3D(cells(xi).toDouble, cells(yi).toDouble, cells(zi).toDouble))
+      }.toIndexedSeq
+    }
