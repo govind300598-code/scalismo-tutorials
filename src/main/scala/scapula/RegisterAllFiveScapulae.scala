@@ -13,43 +13,40 @@ import java.awt.Color
 import java.io.File
 
 /**
- * Registers 5 target scapulae to the reference and shows the posterior shape
- * model (modes) in the Scalismo Viewer alongside the target surface.
+ * Registers 5 target scapulae to the reference IN THE REFERENCE COORDINATE SPACE.
+ *
+ * KEY FIX (root cause of scattered / misaligned visualization):
+ *   Previous scripts moved the REFERENCE into each target's space.  Every target
+ *   lives at different world coordinates, so all meshes appeared scattered when
+ *   shown together, and the saved surfaces were useless for SSM building.
+ *
+ *   Correct approach: move each TARGET into the reference space (rigid align
+ *   target -> reference), then GP-deform the reference to match that rigidly-
+ *   aligned target.  All registered meshes end up in ONE common reference frame —
+ *   they can be shown together, and they are ready for SSM building directly.
  *
  * Pipeline per target:
- *   1. Landmark Procrustes   — actual per-specimen CSV coordinates
- *   2. Trimmed rigid ICP     — refines pose without touching shape
- *   3. GP non-rigid ICP      — establishes dense correspondence
+ *   1. Rigid align TARGET -> reference space (landmark Procrustes + trimmed ICP)
+ *   2. GP non-rigid ICP: deform reference mesh to match target-in-ref-space
+ *   3. Registered mesh = model mean  (lives in reference space)
  *
- * Kernel choice (single Gaussian, best for scapula):
- *   sigma     = 65 mm  — half the scapula diagonal; captures smooth whole-bone
- *                         deformations (blade tilt, glenoid offset, acromion
- *                         angle) without introducing wiggly artefacts
- *   amplitude = 20 mm  — covers realistic inter-subject shape variation;
- *                         the posterior shrinks this where data is close
+ * Viewer shows per target (all in reference space — overlap correctly):
+ *   "Target in ref space"  grey  40% — target after rigid alignment to ref
+ *   "Registered mesh"      blue  90% — non-rigidly registered result
+ *   "Shape model (modes)"        —— interactive PC sliders
  *
- * Viewer shows per target:
- *   • "Target in ref space"  — grey, semi-transparent target mesh
- *   • "Registered mesh"      — blue, opaque registered mean
- *   • "Shape model (modes)"  — interactive sliders to explore PC modes 1-N
- *
- * Outputs saved to:  <data-parent>/Scapula_GP_Registered/
- *   registered_<id>.vtk   — registered surface mesh
- *   model_<id>.h5         — posterior PDM (for SSM or quality checking)
- *
- * Data directory: set SCAPULA_DATA_DIR env var, or uses Config.dataDir default.
+ * Output folder:  <data-parent>/Scapula_GP_Registered/
+ *   registered_<id>.vtk   registered surface in reference space
+ *   model_<id>.h5         posterior PDM in reference space
  */
 object RegisterAllFiveScapulae {
 
-  // ── Kernel: single Gaussian, tuned for whole-scapula shape ─────────────────
-  // A scapula is ~130 mm diagonal.  sigma = 65 mm (half diagonal) gives one
-  // smooth spatial scale that spans the entire bone, letting the GP deform the
-  // blade, acromion, glenoid and coracoid as a coherent unit rather than
-  // independently.  Sigma < 40 mm makes the deformation field too local and
-  // causes the blade to fold; sigma > 90 mm makes it too global and prevents
-  // the glenoid from fitting independently of the blade.
-  val gpSigma: Double     = 65.0   // mm
-  val gpAmplitude: Double = 20.0   // mm
+  // ── GP kernel ───────────────────────────────────────────────────────────────
+  // sigma = 65 mm = half the scapula diagonal.  Captures smooth whole-bone
+  // deformations without letting the glenoid and blade move independently.
+  // amplitude = 20 mm covers realistic inter-subject shape variation.
+  val gpSigma: Double     = 65.0
+  val gpAmplitude: Double = 20.0
 
   val referenceId: String = "paired_scapula_001_M_64_L"
 
@@ -61,39 +58,34 @@ object RegisterAllFiveScapulae {
     "paired_scapula_012_M_68_L"
   )
 
-  // Output folder (sibling of the data directory)
   val outFolderName: String = "Scapula_GP_Registered"
 
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
+    // ── Data directory ────────────────────────────────────────────────────────
     val dataDir = Config.dataDir
     if (!dataDir.exists())
       sys.error(
         s"Data directory not found: ${dataDir.getAbsolutePath}\n" +
-          "Set SCAPULA_DATA_DIR to the folder that contains the STL files and landmark CSV."
+          "Set SCAPULA_DATA_DIR to the folder containing the STL files and landmark CSV."
       )
     println(s"Data directory : ${dataDir.getAbsolutePath}")
 
-    // ── Load actual per-specimen landmark coordinates from the CSV ─────────────
+    // ── Landmark CSV (actual per-specimen 3D coordinates) ─────────────────────
     val csv = ScapulaData.csvFile(dataDir)
     println(s"Landmark CSV   : ${csv.getAbsolutePath}")
     val (landmarks, fromHeader, _) = ScapulaData.readLandmarkCsv(csv)
     if (!fromHeader)
-      println(
-        "  !! WARNING: landmark column names did not match header — " +
-          "using fallback column offsets. Verify the CSV structure."
-      )
-    println(s"  ${landmarks.size} specimens in CSV, " +
-      s"${ScapulaData.landmarkNames.mkString("/")} per specimen")
+      println("  !! WARNING: landmark columns resolved by fallback offsets — verify CSV structure.")
+    println(s"  ${landmarks.size} specimens in CSV, landmarks: ${ScapulaData.landmarkNames.mkString(", ")}")
 
-    // ── Reference ──────────────────────────────────────────────────────────────
+    // ── Reference mesh ────────────────────────────────────────────────────────
     val refFile = new File(dataDir, s"$referenceId.stl")
-    require(refFile.exists(),
-      s"Reference STL not found: ${refFile.getAbsolutePath}")
+    require(refFile.exists(),    s"Reference STL not found: ${refFile.getAbsolutePath}")
     require(landmarks.contains(referenceId),
-      s"Reference '$referenceId' not in CSV. First 5 keys: ${landmarks.keys.take(5).mkString(", ")}")
+      s"'$referenceId' not in CSV. First 5 keys: ${landmarks.keys.take(5).mkString(", ")}")
 
     val refRaw: TriangleMesh[_3D] = ScapulaData.loadMesh(refFile)
     val refMesh: TriangleMesh[_3D] =
@@ -108,39 +100,52 @@ object RegisterAllFiveScapulae {
       println(f"    ${l.id}%-4s  (${l.point.x}%9.2f, ${l.point.y}%9.2f, ${l.point.z}%9.2f) mm")
     }
 
-    // ── GP prior ───────────────────────────────────────────────────────────────
+    // ── GP prior — computed ONCE on the fixed reference mesh ──────────────────
+    // The GP domain is refMesh; it stays fixed for all targets.
     println(s"\nGP kernel      : Gaussian  sigma=$gpSigma mm  amplitude=$gpAmplitude mm")
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](
       DiagonalKernel(GaussianKernel[_3D](gpSigma) * gpAmplitude, 3)
     )
+    println("Approximating GP on reference mesh (done once for all targets)...")
+    val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
+      refMesh,
+      gp,
+      relativeTolerance = Config.gpRelativeTolerance,
+      interpolator      = NearestNeighborInterpolator3D()
+    )
+    println(s"  GP rank: ${lowRankGP.rank}")
 
-    // ── Output folder ──────────────────────────────────────────────────────────
+    // Point ids sampled uniformly over the reference — reused every target
+    val ptStride = math.max(1, refMesh.pointSet.numberOfPoints / 2500)
+    val ptIds    = (0 until refMesh.pointSet.numberOfPoints by ptStride).map(PointId(_))
+
+    // ── Output folder ─────────────────────────────────────────────────────────
     val outDir = new File(dataDir.getParentFile, outFolderName)
     outDir.mkdirs()
-    println(s"Output folder  : ${outDir.getAbsolutePath}\n")
+    println(s"\nOutput folder  : ${outDir.getAbsolutePath}\n")
 
     val ui: Option[ScalismoUI] = if (Config.showUi) Some(ScalismoUI()) else None
 
-    // ── Show reference in its own group ───────────────────────────────────────
+    // Show reference in its own group (gold)
     ui.foreach { scalismoUi =>
-      val refGrp  = scalismoUi.createGroup("Reference")
-      val refView = scalismoUi.show(refGrp, refMesh, referenceId)
-      refView.color   = new Color(240, 190, 80)
-      refView.opacity = 0.6f
+      val grp  = scalismoUi.createGroup("Reference")
+      val view = scalismoUi.show(grp, refMesh, referenceId)
+      view.color   = new Color(240, 190, 80)
+      view.opacity = 0.70f
     }
 
-    // ── Register each target ───────────────────────────────────────────────────
+    // ── Register each target ──────────────────────────────────────────────────
     for ((tId, idx) <- targetIds.zipWithIndex) {
-      println(s"═══ [${idx + 1}/5]  $tId ═══")
+      println(s"=== [${idx + 1}/5]  $tId ===")
 
       val tFile = new File(dataDir, s"$tId.stl")
       if (!tFile.exists())
-        println(s"  SKIP – STL not found: ${tFile.getAbsolutePath}")
+        println(s"  SKIP - STL not found: ${tFile.getAbsolutePath}")
       else if (!landmarks.contains(tId))
-        println(s"  SKIP – '$tId' absent from landmark CSV")
+        println(s"  SKIP - '$tId' absent from landmark CSV")
       else {
 
-        // Load + decimate target
+        // Load and decimate target
         val targetRaw: TriangleMesh[_3D] = ScapulaData.loadMesh(tFile)
         val targetMesh: TriangleMesh[_3D] =
           if (targetRaw.pointSet.numberOfPoints > Config.modelResolution)
@@ -154,94 +159,84 @@ object RegisterAllFiveScapulae {
           println(f"      ${l.id}%-4s  (${l.point.x}%9.2f, ${l.point.y}%9.2f, ${l.point.z}%9.2f) mm")
         }
 
-        // Sanity: landmark spread < 5 mm almost certainly means a bad CSV row
-        val spread = {
-          val xs = targetLms.map(_.point.x)
-          val ys = targetLms.map(_.point.y)
-          val zs = targetLms.map(_.point.z)
-          math.sqrt(
-            math.pow(xs.max - xs.min, 2) +
-              math.pow(ys.max - ys.min, 2) +
-              math.pow(zs.max - zs.min, 2)
-          )
-        }
+        // Landmark spread sanity check
+        val xs = targetLms.map(_.point.x)
+        val ys = targetLms.map(_.point.y)
+        val zs = targetLms.map(_.point.z)
+        val spread = math.sqrt(
+          math.pow(xs.max - xs.min, 2) + math.pow(ys.max - ys.min, 2) + math.pow(zs.max - zs.min, 2)
+        )
         if (spread < 5.0)
-          println(f"  !! WARNING: landmark spread = $spread%.1f mm (< 5 mm). CSV row looks wrong.")
+          println(f"  !! WARNING: landmark spread = $spread%.1f mm — CSV row looks wrong.")
 
-        // ── 1. Landmark Procrustes + trimmed rigid ICP ────────────────────────
-        val (alignedRef: TriangleMesh[_3D], _) = RigidAlign.landmarkThenIcp(
-          refMesh, refLms, targetMesh, targetLms,
+        // ── Step 1: Rigid align TARGET -> reference space ─────────────────────
+        // NOTE: arguments are (moving=target, fixedTarget=refMesh).
+        // This is the OPPOSITE of before. The target is brought into the
+        // reference coordinate frame.  All subsequent work is in ref space.
+        val (targetInRefSpace: TriangleMesh[_3D], _) = RigidAlign.landmarkThenIcp(
+          targetMesh, targetLms,   // moving mesh  (target brought to ref)
+          refMesh,    refLms,      // fixed target (reference is fixed)
           icpIterations = Config.icpIterations
         )
-        println(s"  1. Procrustes + rigid ICP done")
+        println(s"  1. Target rigidly aligned into reference space")
 
-        // ── 2. Low-rank GP approximation ─────────────────────────────────────
-        val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-          alignedRef,
-          gp,
-          relativeTolerance = Config.gpRelativeTolerance,
-          interpolator      = NearestNeighborInterpolator3D()
-        )
-        println(s"  2. GP approximated  (rank ${lowRankGP.rank})")
-
-        // ── 3. GP non-rigid ICP ──────────────────────────────────────────────
-        var model   = PointDistributionModel[_3D, TriangleMesh](alignedRef, lowRankGP)
-        val ptStride = math.max(1, alignedRef.pointSet.numberOfPoints / 2500)
-        val ptIds   = (0 until alignedRef.pointSet.numberOfPoints by ptStride).map(PointId(_))
+        // ── Step 2: GP non-rigid ICP (deform reference to match target-in-ref-space)
+        // Start from a fresh model every target
+        var model = PointDistributionModel[_3D, TriangleMesh](refMesh, lowRankGP)
 
         for (iter <- 0 until Config.icpIterations) {
           val meanMesh = model.mean
+          // Correspondences: mean points -> closest on TARGET-IN-REF-SPACE
           val correspondences: IndexedSeq[(PointId, Point[_3D])] = ptIds.flatMap { pid =>
             val pt      = meanMesh.pointSet.point(pid)
-            val nearest = targetMesh.operations.closestPointOnSurface(pt).point
+            val nearest = targetInRefSpace.operations.closestPointOnSurface(pt).point
             if ((nearest - pt).norm < 15.0) Some((pid, nearest)) else None
           }
           if (correspondences.nonEmpty)
             model = model.posterior(correspondences, sigma2 = 1.0)
           if (iter == 0 || (iter + 1) % 10 == 0 || iter == Config.icpIterations - 1)
-            println(s"    GP iter ${iter + 1}/${Config.icpIterations}: ${correspondences.size} active correspondences")
+            println(s"    GP iter ${iter + 1}/${Config.icpIterations}: ${correspondences.size} correspondences")
         }
 
         val registeredMesh: TriangleMesh[_3D] = model.mean
-        println(s"  3. GP non-rigid ICP done")
+        println(s"  2. GP non-rigid ICP done")
 
-        // Quality report
-        val distStats = Metrics.symmetric(registeredMesh, targetMesh)
+        // Registration quality: registered (in ref space) vs target (in ref space)
+        val distStats = Metrics.symmetric(registeredMesh, targetInRefSpace)
         println(s"  Quality : ${distStats.render}")
         if (distStats.mean > 3.0)
-          println(s"  !! mean surface distance > 3 mm — check landmark CSV row for $tId")
+          println(s"  !! mean > 3 mm - inspect landmark CSV row for $tId")
 
-        // ── 4. Save registered surface and posterior model ────────────────────
+        // ── Step 3: Save (both in reference space) ────────────────────────────
         val vtkOut = new File(outDir, s"registered_$tId.vtk")
         val h5Out  = new File(outDir, s"model_$tId.h5")
         MeshIO.writeMesh(registeredMesh, vtkOut).get
         StatisticalModelIO.writeStatisticalTriangleMeshModel3D(model, h5Out).get
-        println(s"  Saved .vtk  → ${vtkOut.getName}")
-        println(s"  Saved .h5   → ${h5Out.getName}")
+        println(s"  Saved .vtk -> ${vtkOut.getName}")
+        println(s"  Saved .h5  -> ${h5Out.getName}")
 
-        // ── 5. Visualise: target + registered mesh + shape model modes ────────
+        // ── Step 4: Visualise — all in reference space, overlap correctly ──────
         ui.foreach { scalismoUi =>
           val grp = scalismoUi.createGroup(s"[${idx + 1}] $tId")
 
-          // Target surface (grey, semi-transparent)
-          val tView = scalismoUi.show(grp, targetMesh, "Target in ref space")
+          // Target rigidly brought into reference space (grey, semi-transparent)
+          val tView = scalismoUi.show(grp, targetInRefSpace, "Target in ref space")
           tView.color   = new Color(210, 210, 210)
           tView.opacity = 0.40f
 
-          // Registered mean (blue, opaque)
+          // Non-rigidly registered mean (blue, opaque)
           val rView = scalismoUi.show(grp, registeredMesh, "Registered mesh")
           rView.color   = new Color(50, 155, 220)
           rView.opacity = 0.90f
 
-          // Posterior shape model — drag the sliders to explore PC modes
-          // Mode 1 = direction of most shape variance for this target
+          // Posterior shape model — drag PC sliders to see modes
           scalismoUi.show(grp, model, "Shape model (modes)")
         }
       }
       println()
     }
 
-    println(s"All done.  Open Scalismo Viewer to explore mode sliders.")
-    println(s"Results   : ${outDir.getAbsolutePath}")
+    println(s"All done.  All registered meshes are in the reference coordinate space.")
+    println(s"Results -> ${outDir.getAbsolutePath}")
   }
 }
