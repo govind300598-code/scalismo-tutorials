@@ -281,16 +281,17 @@ object SsmPipeline {
   // SSM builder
   // ---------------------------------------------------------------------------
 
+  // DataCollection.gpa needs an implicit Random (for the Procrustes solver).
+  // createUsingPCA in Scalismo 0.92 returns the model directly (not a Try).
   private def buildSsm(
     reference : TriangleMesh[_3D],
     meshes    : IndexedSeq[TriangleMesh[_3D]],
     label     : String
-  ): PointDistributionModel[_3D, TriangleMesh] = {
+  )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
     println(s"\nBuilding $label from ${meshes.length} meshes...")
     val dc    = DataCollection.fromTriangleMesh3DSequence(reference, meshes)
     val dcGpa = DataCollection.gpa(dc)
     val model = PointDistributionModel.createUsingPCA(dcGpa)
-      .getOrElse(throw new RuntimeException(s"Failed to build $label"))
     println(s"$label built: rank=${model.rank}  vertices=${model.mean.pointSet.numberOfPoints}")
     model
   }

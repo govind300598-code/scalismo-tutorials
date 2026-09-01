@@ -19,9 +19,12 @@ object Evaluate {
   /**
    * Returns (modeIndex, cumulativeExplainedVarianceFraction) for each mode.
    * A more compact model reaches a high fraction with fewer modes.
+   *
+   * `klBasis` in Scalismo 0.92 returns a Seq, so we call `.toIndexedSeq` explicitly.
+   * `createUsingPCA` in Scalismo 0.92 returns the model directly (not a Try).
    */
   def compactness(model: PointDistributionModel[_3D, TriangleMesh]): IndexedSeq[(Int, Double)] = {
-    val eigenvalues = model.gp.klBasis.map(_.eigenvalue)
+    val eigenvalues = model.gp.klBasis.map(_.eigenvalue).toIndexedSeq
     val total       = eigenvalues.sum
     var cumulative  = 0.0
     eigenvalues.zipWithIndex.map { case (v, i) =>
@@ -39,8 +42,8 @@ object Evaluate {
    * left-out mesh onto it, and measure the point-to-point reconstruction error.
    *
    * All `meshes` are already in correspondence with `reference` (same topology, same vertex order),
-   * so no additional GPA is applied inside the LOO loop — the registered shapes are already
-   * in a consistent coordinate frame.  Point-to-point distance is valid for the same reason.
+   * so no additional GPA is applied — the registered shapes are already in a consistent frame.
+   * Point-to-point distance is valid for the same reason.
    *
    * Returns (meanError_mm, stdError_mm).
    */
@@ -53,17 +56,16 @@ object Evaluate {
     val errors: IndexedSeq[Double] = meshes.indices.map { leaveOutIdx =>
       val training = meshes.indices.filterNot(_ == leaveOutIdx).map(meshes)
 
-      // Build without an extra GPA pass: shapes are already rigidly registered
+      // Build without an extra GPA pass: shapes are already rigidly registered.
+      // In Scalismo 0.92 createUsingPCA returns the model directly (no Try wrapper).
       val dc      = DataCollection.fromTriangleMesh3DSequence(reference, training)
       val loModel = PointDistributionModel.createUsingPCA(dc)
-        .getOrElse(throw new RuntimeException(s"LOO model build failed at index $leaveOutIdx"))
 
       val target       = meshes(leaveOutIdx)
-      // Project onto the LOO model: find closest instance in shape space
       val coefficients = loModel.coefficients(target)
       val projected    = loModel.instance(coefficients)
 
-      // Point-to-point RMSE — valid because both meshes are in correspondence with `reference`
+      // Point-to-point RMSE — valid because both meshes share reference topology
       val dists = Metrics.correspondingDistances(projected, target)
       dists.sum / dists.length
     }
@@ -77,8 +79,8 @@ object Evaluate {
 
   /**
    * Draw `nSamples` random instances from the model (coefficients clamped to ±3σ), find the
-   * nearest training shape for each by mean surface distance, and return the mean and std of
-   * those nearest-neighbour distances.  Lower = more realistic samples.
+   * nearest training shape for each by mean point-to-point distance, and return (mean, std).
+   * Lower = more realistic samples.
    */
   def specificity(
     model         : PointDistributionModel[_3D, TriangleMesh],
@@ -90,7 +92,6 @@ object Evaluate {
       val clamped = raw.map(c => math.max(-3.0, math.min(3.0, c)))
       val sample  = model.instance(clamped)
 
-      // Nearest training shape by mean point-to-point distance (shapes are in correspondence)
       val minDist = trainingMeshes.map { t =>
         val d = Metrics.correspondingDistances(sample, t)
         d.sum / d.length

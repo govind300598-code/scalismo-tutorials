@@ -18,7 +18,7 @@ import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, Point
 object NonRigidReg {
 
   /**
-   * Sigma/scale pairs for a multi-scale Gaussian kernel suitable for scapula-sized bones (units: mm).
+   * Sigma/scale pairs for a multi-scale Gaussian kernel suitable for scapula-sized bones (mm).
    * Large sigmas handle global shape; small sigmas refine local details.
    */
   val defaultScales: Seq[(Double, Double)] = Seq(
@@ -34,20 +34,24 @@ object NonRigidReg {
     scales    : Seq[(Double, Double)] = defaultScales
   ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
 
-    val zeroMean = Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector.zeros[_3D])
+    // In Scalismo 0.92 the Euclidean-space domain is EuclideanSpace[_3D]()
+    // (EuclideanSpace3D was renamed/removed in the Scala 3 port)
+    val zeroMean = Field(EuclideanSpace[_3D](), (_: Point[_3D]) => EuclideanVector.zeros[_3D])
 
-    // Build as a collection typed to the supertype so `+` resolves correctly
+    // Build as Seq[MatrixValuedPDKernel] so the `+` operator resolves on the supertype
     val kernelList: Seq[scalismo.kernels.MatrixValuedPDKernel[_3D]] =
       scales.map { case (sigma, s) => DiagonalKernel[_3D](GaussianKernel[_3D](sigma) * s, 3) }
     val kernel = kernelList.reduce(_ + _)
 
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
 
+    // Pass `reference` (TriangleMesh, a DiscreteDomain) – NOT reference.pointSet
+    // (UnstructuredPoints is not a DiscreteDomain in Scalismo 0.92)
     LowRankGaussianProcess.approximateGPCholesky(
-      reference.pointSet,
+      reference,
       gp,
       relativeTolerance = Config.gpRelativeTolerance,
-      interpolator      = NearestNeighborInterpolator3D[EuclideanVector[_3D]]()
+      interpolator      = NearestNeighborInterpolator3D[TriangleMesh, EuclideanVector[_3D]]()
     )
   }
 
@@ -56,9 +60,9 @@ object NonRigidReg {
    *
    * Each iteration:
    *   1. For every vertex of the current deformed reference, find the closest surface point on the target.
-   *   2. Reject correspondences whose distance exceeds `outlierThreshMm` (thin structures on one mesh only).
+   *   2. Reject correspondences whose distance exceeds `outlierThreshMm`.
    *   3. Compute the posterior GP mean conditioned on those correspondences.
-   *   4. The posterior mean is the next current mesh.
+   *   4. The posterior mean becomes the next current mesh.
    *
    * Returns the registered mesh: same topology and vertex count as `reference`, fitted to `target`.
    */
