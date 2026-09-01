@@ -47,6 +47,9 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  /** Optional: set to a mesh model-id (without .stl) to choose a specific reference specimen. */
+  val refId: Option[String] = sys.env.get("SCAPULA_REF_ID")
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
