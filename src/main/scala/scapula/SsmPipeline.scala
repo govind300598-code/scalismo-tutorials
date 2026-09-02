@@ -3,7 +3,7 @@ package scapula
 import scalismo.geometry.*
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{LowRankGaussianProcess, PointDistributionModel}
+import scalismo.statisticalmodel.PointDistributionModel
 import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.utils.Random
 
@@ -67,11 +67,6 @@ object SsmPipeline {
     // Cache point-ids for each landmark on the decimated reference
     val refLmPtIds = refLms.map(lm => lm.id -> reference.pointSet.findClosestPoint(lm.point).id).toMap
 
-    // ---------------------------------------------------------------- GP prior (SSM1)
-    println("\nBuilding GP prior on reference mesh...")
-    val gpPrior1 = NonRigidReg.buildGpPrior(reference)
-    println(s"GP prior rank: ${gpPrior1.rank}")
-
     // ================================================================ SSM1
     banner("STAGE 2 – REGISTRATION FOR SSM1")
 
@@ -83,7 +78,6 @@ object SsmPipeline {
       landmarks = landmarks,
       reference = reference,
       refLms    = refLms,
-      gpPrior   = gpPrior1,
       outDir    = ssm1RegDir
     )
 
@@ -107,10 +101,6 @@ object SsmPipeline {
     // ================================================================ SSM2
     banner("STAGE 4 – REGISTRATION FOR SSM2 (SSM1 mean as new reference)")
 
-    println("Building GP prior on SSM1 mean shape...")
-    val gpPrior2 = NonRigidReg.buildGpPrior(ssm1Mean)
-    println(s"GP prior 2 rank: ${gpPrior2.rank}")
-
     val ssm2RegDir = new File(outDir, "ssm2_registered")
     ssm2RegDir.mkdirs()
 
@@ -119,7 +109,6 @@ object SsmPipeline {
       landmarks = landmarks,
       reference = ssm1Mean,
       refLms    = ssm1MeanLms,
-      gpPrior   = gpPrior2,
       outDir    = ssm2RegDir
     )
 
@@ -235,7 +224,6 @@ object SsmPipeline {
     landmarks : Map[String, IndexedSeq[Landmark[_3D]]],
     reference : TriangleMesh[_3D],
     refLms    : IndexedSeq[Landmark[_3D]],
-    gpPrior   : LowRankGaussianProcess[_3D, EuclideanVector[_3D]],
     outDir    : File
   )(implicit rng: Random): IndexedSeq[TriangleMesh[_3D]] = {
 
@@ -263,11 +251,10 @@ object SsmPipeline {
 
         // Step 2: GP-ICP non-rigid registration
         println(s"    GP-ICP (${Config.icpIterations} iterations)...")
-        val registered = NonRigidReg.gpIcp(
-          reference  = reference,
-          target     = rigidAligned,
-          lowRankGP  = gpPrior,
-          iterations = Config.icpIterations
+        val registered = NonRigidReg.register(
+          reference     = reference,
+          target        = rigidAligned,
+          icpIterations = Config.icpIterations
         )
 
         MeshIO.writeMesh(registered, outFile).get

@@ -1,100 +1,80 @@
 package scapula
 
+import scalismo.common.{PointId, UnstructuredPoints3D}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
-import scalismo.common.{Field, PointId}
 import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
-import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
+import scalismo.mesh.{TriangleMesh, TriangleMesh3D}
+import scalismo.numerics.UniformMeshSampler3D
+import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess}
+import scalismo.utils.Random
 
-/**
- * GP-based non-rigid registration.
- *
- * A multi-scale Gaussian kernel is approximated on the reference mesh via pivoted Cholesky.
- * GP-ICP then iterates: find closest-surface correspondences → compute posterior mean → repeat.
- * The result is a deformed copy of the reference that matches the target in shape while
- * preserving the reference topology and point count exactly.
- */
 object NonRigidReg {
 
-  /**
-   * Sigma/scale pairs for a multi-scale Gaussian kernel suitable for scapula-sized bones (mm).
-   * Large sigmas handle global shape; small sigmas refine local details.
-   */
-  val defaultScales: Seq[(Double, Double)] = Seq(
-    (80.0, 10.0),
-    (40.0,  5.0),
-    (20.0,  2.0),
-    (10.0,  1.0)
-  )
+  def registerAll(
+    reference    : TriangleMesh[_3D],
+    targets      : IndexedSeq[(String, TriangleMesh[_3D])],
+    icpIterations: Int          = 40,
+    outDir       : java.io.File = new java.io.File(".")
+  )(implicit rng: Random): IndexedSeq[(String, TriangleMesh[_3D])] = {
 
-  /** Build a low-rank GP prior over the reference mesh vertex set. */
-  def buildGpPrior(
-    reference : TriangleMesh[_3D],
-    scales    : Seq[(Double, Double)] = defaultScales
-  ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
+    println("  Building GP prior (sigma=20, scale=5, Cholesky)...")
 
-    // In Scalismo 0.92 the Euclidean-space domain is EuclideanSpace[_3D]()
-    // (EuclideanSpace3D was renamed/removed in the Scala 3 port)
-    val zeroMean = Field(EuclideanSpace[_3D](), (_: Point[_3D]) => EuclideanVector.zeros[_3D])
+    // Single Gaussian kernel: sigma = 20 mm, scaleFactor = 5
+    val kernel    = DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 20.0, scaleFactor = 5.0), 3)
+    val gp        = GaussianProcess[_3D, EuclideanVector[_3D]](kernel)
 
-    // Build as Seq[MatrixValuedPDKernel] so the `+` operator resolves on the supertype
-    val kernelList: Seq[scalismo.kernels.MatrixValuedPDKernel[_3D]] =
-      scales.map { case (sigma, s) => DiagonalKernel[_3D](GaussianKernel[_3D](sigma) * s, 3) }
-    val kernel = kernelList.reduce(_ + _)
-
-    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
-
-    // Pass `reference` (TriangleMesh, a DiscreteDomain) – NOT reference.pointSet
-    // (UnstructuredPoints is not a DiscreteDomain in Scalismo 0.92)
-    LowRankGaussianProcess.approximateGPCholesky(
+    val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       reference,
       gp,
-      relativeTolerance = Config.gpRelativeTolerance,
+      relativeTolerance = 0.01,
       interpolator      = NearestNeighborInterpolator3D[TriangleMesh, EuclideanVector[_3D]]()
     )
-  }
+    val discreteGP = lowRankGP.discretize(reference)
+    println(s"  GP rank: ${discreteGP.rank}")
 
-  /**
-   * GP-ICP (non-rigid iterative closest point).
-   *
-   * Each iteration:
-   *   1. For every vertex of the current deformed reference, find the closest surface point on the target.
-   *   2. Reject correspondences whose distance exceeds `outlierThreshMm`.
-   *   3. Compute the posterior GP mean conditioned on those correspondences.
-   *   4. The posterior mean becomes the next current mesh.
-   *
-   * Returns the registered mesh: same topology and vertex count as `reference`, fitted to `target`.
-   */
-  def gpIcp(
-    reference       : TriangleMesh[_3D],
-    target          : TriangleMesh[_3D],
-    lowRankGP       : LowRankGaussianProcess[_3D, EuclideanVector[_3D]],
-    iterations      : Int,
-    sigma2          : Double = 2.0,
-    outlierThreshMm : Double = 25.0
-  ): TriangleMesh[_3D] = {
+    def runIcp(target: TriangleMesh[_3D]): TriangleMesh[_3D] = {
+      val tgtOps  = target.operations
+      var current = reference
 
-    val pdm = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
-    var currentMesh = pdm.mean
+      for (iter <- 0 until icpIterations) {
+        // Anneal noise: loose at iter 0 (sigma2=4), tight at last iter (sigma2=0.25)
+        val alpha  = iter.toDouble / math.max(1, icpIterations - 1)
+        val sigma2 = 4.0 * (1.0 - alpha) + 0.25 * alpha
 
-    for (i <- 0 until iterations) {
-      val correspondences =
-        currentMesh.pointSet.points.toIndexedSeq.zipWithIndex.flatMap { case (pt, idx) =>
-          val cp   = target.operations.closestPointOnSurface(pt).point
-          val dist = (pt - cp).norm
-          if (dist < outlierThreshMm) Some(PointId(idx) -> cp) else None
+        val sampleIds = UniformMeshSampler3D(current, 1200)
+          .sample()
+          .map { case (pt, _) => reference.pointSet.findClosestPoint(pt).id }
+          .distinct
+
+        val obs: IndexedSeq[(PointId, EuclideanVector[_3D])] = sampleIds.map { ptId =>
+          val curPt = current.pointSet.point(ptId)
+          val tgtPt = tgtOps.closestPointOnSurface(curPt).point
+          ptId -> (tgtPt - reference.pointSet.point(ptId))
         }
 
-      if (correspondences.size >= 50) {
-        val posterior = pdm.posterior(correspondences, sigma2)
-        currentMesh = posterior.mean
+        val post   = discreteGP.posterior(obs, sigma2)
+        val newPts = reference.pointSet.pointIds.toIndexedSeq.map { ptId =>
+          reference.pointSet.point(ptId) + post.mean(ptId)
+        }
+        current = TriangleMesh3D(UnstructuredPoints3D(newPts), reference.triangulation)
       }
-
-      if ((i + 1) % 10 == 0)
-        println(f"      GP-ICP iter ${i + 1}%3d/$iterations  correspondences=${correspondences.size}")
+      current
     }
 
-    currentMesh
+    targets.zipWithIndex.map { case ((id, target), i) =>
+      println(s"  GP-ICP [${i + 1}/${targets.size}] $id")
+      val reg = runIcp(target)
+      scalismo.io.MeshIO.writeMesh(reg, new java.io.File(outDir, s"reg_$id.stl")).get
+      (id, reg)
+    }
   }
+
+  /** Convenience wrapper for a single target. */
+  def register(
+    reference    : TriangleMesh[_3D],
+    target       : TriangleMesh[_3D],
+    icpIterations: Int = 40
+  )(implicit rng: Random): TriangleMesh[_3D] =
+    registerAll(reference, IndexedSeq(("_tmp", target)), icpIterations).head._2
 }
