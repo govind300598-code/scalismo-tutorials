@@ -3,7 +3,8 @@ package scapula
 import scalismo.geometry._3D
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{DataCollection, PointDistributionModel}
+import scalismo.statisticalmodel.PointDistributionModel
+import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.utils.Random
 
 import java.io.File
