@@ -71,11 +71,14 @@ ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 def load_registered_meshes(out_dir: Path) -> dict:
     stl_files = sorted(out_dir.glob("reg_*.stl"))
     if not stl_files:
-        sys.exit(f"ERROR: No reg_*.stl files found in {out_dir}\n"
-                 f"Run RegistrationComparisonViewer first.")
+        # fallback: any STL in the directory
+        stl_files = sorted(out_dir.glob("*.stl"))
+    if not stl_files:
+        sys.exit(f"ERROR: No STL files found in {out_dir}\n"
+                 f"Make sure SCAPULA_OUT_DIR points to the folder containing the registered meshes.")
     meshes = {}
     for f in tqdm(stl_files, desc="Loading meshes"):
-        sid = f.stem[4:]  # strip "reg_" prefix
+        sid = f.stem[4:] if f.stem.startswith("reg_") else f.stem
         meshes[sid] = trimesh.load(str(f), process=False)
     print(f"  Loaded {len(meshes)} registered meshes")
     nv = next(iter(meshes.values())).vertices.shape[0]

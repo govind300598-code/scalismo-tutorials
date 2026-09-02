@@ -128,6 +128,9 @@ object RegistrationComparisonViewer {
       val sym = Metrics.symmetric(fitted, rigidAligned)
       println(f"RMS=${sym.rms}%.3f mm  HD95=${sym.hd95}%.3f mm")
 
+      // save fitted mesh so Python analysis can load it
+      scalismo.io.MeshIO.writeMesh(fitted, new File(outDir, s"reg_${spec.modelId}.stl"))
+
       RegisteredCase(spec.modelId, rigidAligned, fitted, sym.rms, sym.hd95)
     }
 
