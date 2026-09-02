@@ -232,4 +232,62 @@ object Metrics {
     require(a.pointSet.numberOfPoints == b.pointSet.numberOfPoints, "meshes are not in correspondence")
     a.pointSet.points.zip(b.pointSet.points).map { case (p, q) => (p - q).norm }.toIndexedSeq
   }
+
+  /** RMSE of point-to-point distances for corresponding meshes. */
+  def ptptRmse(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    val d = correspondingDistances(a, b)
+    math.sqrt(d.map(x => x * x).sum / d.length)
+  }
+
+  /**
+   * Chamfer distance (squared): CD(A,B) = mean_a min_b ||a-b||² + mean_b min_a ||a-b||²
+   * Uses vertex-to-surface distances (nearest point on mesh surface, not vertex).
+   * Returns the total Chamfer value; divide by 2 for the symmetric average.
+   */
+  def chamferSquared(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    val fwd = surfaceDistances(a, b)
+    val bwd = surfaceDistances(b, a)
+    fwd.map(d => d * d).sum / fwd.length + bwd.map(d => d * d).sum / bwd.length
+  }
+
+  /** Chamfer distance (L1, non-squared): mean_a min_b ||a-b|| + mean_b min_a ||a-b||. */
+  def chamferL1(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    val fwd = surfaceDistances(a, b)
+    val bwd = surfaceDistances(b, a)
+    fwd.sum / fwd.length + bwd.sum / bwd.length
+  }
+
+  final case class FullDistStats(
+    ptptMean: Double, ptptRmse: Double, ptptMax: Double,
+    surfMean: Double, surfRms: Double, surfHd95: Double, surfHd: Double,
+    chamferL1: Double, chamferSq: Double
+  ) {
+    def header: String =
+      "ptpt_mean,ptpt_rmse,ptpt_max,surf_mean,surf_rms,surf_hd95,surf_hd,chamfer_l1,chamfer_sq"
+    def csv: String =
+      f"$ptptMean%.4f,$ptptRmse%.4f,$ptptMax%.4f," +
+      f"$surfMean%.4f,$surfRms%.4f,$surfHd95%.4f,$surfHd%.4f," +
+      f"$chamferL1%.4f,$chamferSq%.6f"
+    def render: String =
+      f"ptpt(mean=$ptptMean%.2f rms=$ptptRmse%.2f max=$ptptMax%.2f) " +
+      f"surf(mean=$surfMean%.2f rms=$surfRms%.2f HD95=$surfHd95%.2f HD=$surfHd%.2f) " +
+      f"chamfer(L1=$chamferL1%.2f sq=$chamferSq%.4f)"
+  }
+
+  /** Compute all distance statistics between two corresponding meshes. */
+  def allStats(registered: TriangleMesh[_3D], target: TriangleMesh[_3D]): FullDistStats = {
+    val ptpt  = correspondingDistances(registered, target)
+    val surf  = symmetric(registered, target)
+    FullDistStats(
+      ptptMean  = ptpt.sum / ptpt.length,
+      ptptRmse  = math.sqrt(ptpt.map(x => x * x).sum / ptpt.length),
+      ptptMax   = ptpt.max,
+      surfMean  = surf.mean,
+      surfRms   = surf.rms,
+      surfHd95  = surf.hd95,
+      surfHd    = surf.hd,
+      chamferL1 = chamferL1(registered, target),
+      chamferSq = chamferSquared(registered, target)
+    )
+  }
 }
