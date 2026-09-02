@@ -49,7 +49,6 @@ object RebuildSSM {
     println("Building SSM via PCA ...")
     val dc = DataCollection.fromTriangleMesh3DSequence(reference, meshes)
     val model = PointDistributionModel.createUsingPCA[_3D, TriangleMesh](dc)
-      .getOrElse(throw new RuntimeException("PCA failed"))
 
     println(s"  ${model.rank} modes  |  ${model.reference.pointSet.numberOfPoints} vertices")
 
