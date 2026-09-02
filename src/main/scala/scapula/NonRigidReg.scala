@@ -3,7 +3,7 @@ package scapula
 import scalismo.common.{PointId, UnstructuredPoints3D}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
-import scalismo.kernels.{DiagonalKernel, GaussianKernel}
+import scalismo.kernels.{DiagonalKernel, GaussianKernel, PDKernel}
 import scalismo.mesh.{TriangleMesh, TriangleMesh3D}
 import scalismo.numerics.UniformMeshSampler3D
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess}
@@ -16,8 +16,8 @@ object NonRigidReg {
     reference: TriangleMesh[_3D],
     scales:    Seq[(Double, Double)]   // (sigma, scaleFactor) pairs
   )(implicit rng: Random): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
-    val kernels = scales.map { case (sigma, sf) => GaussianKernel[_3D](sigma, sf) }
-    val combined = kernels.reduce(_ + _)
+    val kernels: Seq[PDKernel[_3D]] = scales.map { case (sigma, sf) => GaussianKernel[_3D](sigma, sf) }
+    val combined: PDKernel[_3D] = kernels.reduce(_ + _)
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](DiagonalKernel[_3D](combined, 3))
     LowRankGaussianProcess.approximateGPCholesky(
       reference,
