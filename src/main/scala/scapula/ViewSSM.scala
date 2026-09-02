@@ -27,7 +27,7 @@ object ViewSSM {
 
     println(s"Loading SSM from: ${modelFile.getAbsolutePath}")
     val model = StatisticalModelIO
-      .readStatisticalTriangleMeshModel3D(modelFile)
+      .readStatisticalMeshModel(modelFile)
       .getOrElse(throw new RuntimeException(s"Could not read ${modelFile.getName}"))
 
     println(s"  ${model.rank} modes  |  ${model.reference.pointSet.numberOfPoints} vertices")
