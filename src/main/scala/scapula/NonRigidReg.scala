@@ -1,7 +1,7 @@
 package scapula
 
 import scalismo.common.{PointId, UnstructuredPoints3D}
-import scalismo.common.interpolation.NearestNeighborInterpolator3D
+import scalismo.common.interpolation.TriangleMeshInterpolator3D
 import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.{TriangleMesh, TriangleMesh3D}
@@ -22,14 +22,14 @@ object NonRigidReg {
     println("  Building single-scale GP prior (Cholesky)...")
 
     // Single Gaussian kernel configuration
-    val scalarKernel = GaussianKernel[_3D](sigma = 20.0, scaleFactor = 5.0)
+    val scalarKernel = GaussianKernel[_3D](sigma = 40.0, scaleFactor = 10.0)
 
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](DiagonalKernel[_3D](scalarKernel, 3))
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       reference,
       gp,
       relativeTolerance = 0.01,
-      interpolator      = NearestNeighborInterpolator3D[TriangleMesh, EuclideanVector[_3D]]()
+      interpolator      = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
     val discreteGP = lowRankGP.discretize(reference)
     println(s"  GP rank: ${discreteGP.rank}")
