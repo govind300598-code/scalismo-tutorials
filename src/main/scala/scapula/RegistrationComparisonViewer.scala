@@ -69,7 +69,7 @@ object RegistrationComparisonViewer {
     println("=" * 70)
     println(s"  Data       : ${dataDir.getAbsolutePath}")
     println(s"  Decimation : <= $decimateTo points")
-    println(s"  Kernel     : ${recommendedScales.map { case (s, a) => f"(sigma=$s%.1f, s=$a%.1f)" }.mkString(" + ")}")
+    println(s"  Kernel     : sigma=20.0, scaleFactor=5.0 (single Gaussian)")
 
     // ---------------------------------------------------------------- load
     val csv = ScapulaData.csvFile(dataDir)
