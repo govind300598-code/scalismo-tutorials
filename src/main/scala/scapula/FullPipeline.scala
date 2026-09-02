@@ -94,7 +94,7 @@ object FullPipeline {
     println("\n[STEP 2] Building FFDM prior — seed reference")
     val ffdm1 = buildFfdm(seedRef.mesh)
     println(s"  FFDM rank: ${ffdm1.rank}")
-    StatisticalModelIO.writeStatisticalMeshModel(ffdm1, new File(outDir, "ffdm_pass1.h5")).get
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(ffdm1, new File(outDir, "ffdm_pass1.h5")).get
 
     // ── 4. GP-ICP pass 1 ──────────────────────────────────────────────────────
     println(s"\n[STEP 3] GP-ICP registration — Pass 1 (${rigidAligned.length} specimens)")
@@ -111,7 +111,7 @@ object FullPipeline {
     // ── 5. SSM pass 1 ─────────────────────────────────────────────────────────
     println("\n[STEP 4] Building SSM — Pass 1")
     val ssm1 = buildSsm(seedRef.mesh, pass1.map(_._2))
-    StatisticalModelIO.writeStatisticalMeshModel(ssm1, new File(outDir, "ssm_pass1.h5")).get
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(ssm1, new File(outDir, "ssm_pass1.h5")).get
     println(s"  SSM rank: ${ssm1.rank}")
     val mean1 = ssm1.mean
     MeshIO.writeMesh(mean1, new File(outDir, "mean_pass1.stl")).get
@@ -121,7 +121,7 @@ object FullPipeline {
     println("\n[STEP 5] Building FFDM prior — pass-1 mean (new reference)")
     val ffdm2 = buildFfdm(mean1)
     println(s"  FFDM rank: ${ffdm2.rank}")
-    StatisticalModelIO.writeStatisticalMeshModel(ffdm2, new File(outDir, "ffdm_pass2.h5")).get
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(ffdm2, new File(outDir, "ffdm_pass2.h5")).get
 
     // ── 7. GP-ICP pass 2  (target = rigid-aligned originals, ref = mean1) ────
     //  Using the same rigidly-aligned meshes as targets keeps the number of mesh-loading
@@ -140,7 +140,7 @@ object FullPipeline {
     // ── 8. SSM pass 2 (final) ─────────────────────────────────────────────────
     println("\n[STEP 7] Building SSM — Pass 2 (final)")
     val ssm2 = buildSsm(mean1, pass2.map(_._2))
-    StatisticalModelIO.writeStatisticalMeshModel(ssm2, new File(outDir, "ssm_final.h5")).get
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(ssm2, new File(outDir, "ssm_final.h5")).get
     println(s"  Final SSM rank: ${ssm2.rank}")
     val mean2 = ssm2.mean
     MeshIO.writeMesh(mean2, new File(outDir, "mean_pass2.stl")).get
@@ -195,7 +195,7 @@ object FullPipeline {
     registeredMeshes: IndexedSeq[TriangleMesh[_3D]]
   ): PDM = {
     require(registeredMeshes.nonEmpty, "Need at least 1 shape to build SSM")
-    val dc = DataCollection.fromTriangleMeshSequence(reference, registeredMeshes)
+    val dc = DataCollection.fromTriangleMesh3DSequence(reference, registeredMeshes)
     PointDistributionModel.createUsingPCA(dc)
   }
 }

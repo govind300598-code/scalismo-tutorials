@@ -3,7 +3,7 @@ package scapula
 import scalismo.common.{Field, RealSpace}
 import scalismo.geometry.*
 import scalismo.io.{MeshIO, StatisticalModelIO}
-import scalismo.kernels.{DiagonalKernel, GaussianKernel}
+import scalismo.kernels.{DiagonalKernel, GaussianKernel, MatrixValuedPDKernel}
 import scalismo.mesh.*
 import scalismo.numerics.UniformMeshSampler3D
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
@@ -68,7 +68,7 @@ object BuildFFDMModel {
     printCompactness(lowRankGP)
 
     val modelFile = new File(outDir, "ffdm.h5")
-    StatisticalModelIO.writeStatisticalMeshModel(ffdm, modelFile).get
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(ffdm, modelFile).get
     println(s"\nSaved FFDM model : ${modelFile.getAbsolutePath}")
     MeshIO.writeMesh(refMesh, new File(outDir, "ffdm_reference.stl")).get
     println(s"Saved reference  : ${new File(outDir, "ffdm_reference.stl").getAbsolutePath}")
@@ -96,9 +96,11 @@ object BuildFFDMModel {
     numBasisFns:  Int = 300
   )(implicit rng: Random): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
     val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D], _ => EuclideanVector.zeros[_3D])
-    val kernel = components.map { case (sigma, scale) =>
+    val kernelList = components.map { case (sigma, scale) =>
       DiagonalKernel[_3D](GaussianKernel[_3D](sigma) * scale, 3)
-    }.reduce(_ + _)
+    }
+    val kernel: MatrixValuedPDKernel[_3D] =
+      kernelList.tail.foldLeft[MatrixValuedPDKernel[_3D]](kernelList.head)(_ + _)
     val gp      = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
     val sampler = UniformMeshSampler3D(reference, numBasisFns)
     LowRankGaussianProcess.approximateGPNystrom(gp, sampler, numBasisFns)

@@ -3,7 +3,7 @@ package scapula
 import scalismo.common.PointId
 import scalismo.geometry.*
 import scalismo.mesh.*
-import scalismo.statisticalmodel.{LowRankGaussianProcess, PointDistributionModel}
+import scalismo.statisticalmodel.PointDistributionModel
 import scalismo.utils.Random
 
 /**
@@ -49,18 +49,17 @@ object NonRigidReg {
       val sampleIds: IndexedSeq[PointId] =
         RigidAlign.uniformIds(priorModel.reference, numCorrespondences)
 
-      // Build observations: (PointId in reference, observed deformation vector)
-      // The deformation that should send refPt to the closest point on target.
-      val observations: IndexedSeq[(PointId, EuclideanVector[_3D])] = sampleIds.map { pid =>
-        val currentPt  = currentMesh.pointSet.point(pid)
-        val closestPt  = targetOps.closestPointOnSurface(currentPt).point
-        val refPt      = priorModel.reference.pointSet.point(pid)
-        (pid, closestPt - refPt)
+      // Build observations: (PointId in reference, closest point on target surface).
+      // PointDistributionModel.posterior takes (PointId, Point[D]) pairs — observed target positions,
+      // not deformation vectors; the internal conversion to deformation happens inside the method.
+      val observations: IndexedSeq[(PointId, Point[_3D])] = sampleIds.map { pid =>
+        val currentPt = currentMesh.pointSet.point(pid)
+        val closestPt = targetOps.closestPointOnSurface(currentPt).point
+        (pid, closestPt)
       }
 
-      // Posterior GP given the correspondences; posterior mean = MAP deformation
-      val posteriorGP    = priorModel.gp.posterior(observations, sigma2)
-      val posteriorModel = PointDistributionModel[_3D, TriangleMesh](priorModel.reference, posteriorGP)
+      // Posterior model given the correspondences; posterior mean = MAP-optimal deformation.
+      val posteriorModel = priorModel.posterior(observations, sigma2)
       currentMesh = posteriorModel.mean
 
       if ((iter + 1) % 10 == 0) {

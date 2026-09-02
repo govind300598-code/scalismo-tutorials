@@ -44,7 +44,7 @@ object SSMEval {
     val regMeshes = registered.map(_._2)
 
     // ── A. Compactness ────────────────────────────────────────────────────────
-    val evs   = finalSsm.gp.klBasis.map(_.eigenvalue)
+    val evs   = finalSsm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
     val total = evs.sum
     def varAt(n: Int): Double = evs.take(n).sum / total * 100.0
 
@@ -60,7 +60,7 @@ object SSMEval {
     val looResults: IndexedSeq[(String, Double)] = registered.zipWithIndex.map { case ((spec, testMesh), i) =>
       val trainMeshes = regMeshes.patch(i, Nil, 1)
       val trainRef    = meanRef  // keep the same reference for topology consistency
-      val trainDC     = DataCollection.fromTriangleMeshSequence(trainRef, trainMeshes)
+      val trainDC     = DataCollection.fromTriangleMesh3DSequence(trainRef, trainMeshes)
       val trainModel  = PointDistributionModel.createUsingPCA(trainDC)
       val projected   = trainModel.instance(trainModel.coefficients(testMesh))
       val d           = Metrics.symmetric(testMesh, projected).mean
