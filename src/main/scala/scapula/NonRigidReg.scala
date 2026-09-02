@@ -3,7 +3,7 @@ package scapula
 import scalismo.common.{PointId, UnstructuredPoints3D}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
-import scalismo.kernels.{DiagonalKernel, GaussianKernel, PDKernel}
+import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.{TriangleMesh, TriangleMesh3D}
 import scalismo.numerics.UniformMeshSampler3D
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess}
@@ -11,14 +11,13 @@ import scalismo.utils.Random
 
 object NonRigidReg {
 
-  /** Build a multi-scale GP prior as a sum of Gaussian kernels. */
+  /** Build a GP prior using a single Gaussian kernel (sigma=20, scaleFactor=5). */
   def buildGpPrior(
     reference: TriangleMesh[_3D],
-    scales:    Seq[(Double, Double)]   // (sigma, scaleFactor) pairs
+    scales:    Seq[(Double, Double)]   // ignored — fixed sigma=20, scaleFactor=5
   )(implicit rng: Random): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
-    val kernels: Seq[PDKernel[_3D]] = scales.map { case (sigma, sf) => GaussianKernel[_3D](sigma, sf) }
-    val combined: PDKernel[_3D] = kernels.reduce(_ + _)
-    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](DiagonalKernel[_3D](combined, 3))
+    val kernel = GaussianKernel[_3D](sigma = 20.0, scaleFactor = 5.0)
+    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](DiagonalKernel[_3D](kernel, 3))
     LowRankGaussianProcess.approximateGPCholesky(
       reference,
       gp,
