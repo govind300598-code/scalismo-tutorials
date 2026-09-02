@@ -47,6 +47,9 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  /** ID of the seed reference specimen for pass 1. Must match an STL filename (without .stl). */
+  val ffdmRefId: String = env("SCAPULA_FFDM_REF", "paired_scapula_002_M_56_L")
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
@@ -231,5 +234,70 @@ object Metrics {
   def correspondingDistances(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): IndexedSeq[Double] = {
     require(a.pointSet.numberOfPoints == b.pointSet.numberOfPoints, "meshes are not in correspondence")
     a.pointSet.points.zip(b.pointSet.points).map { case (p, q) => (p - q).norm }.toIndexedSeq
+  }
+
+  final case class PointStats(mean: Double, rmse: Double, max: Double) {
+    def render: String = f"p2p-mean=$mean%5.2f  p2p-rmse=$rmse%5.2f  p2p-max=$max%6.2f"
+  }
+
+  def correspondingStats(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): PointStats = {
+    val d = correspondingDistances(a, b)
+    PointStats(
+      mean = d.sum / d.length,
+      rmse = math.sqrt(d.map(x => x * x).sum / d.length),
+      max  = d.max
+    )
+  }
+
+  /** One-sided Chamfer: mean of min-surface-distances from A vertices to B surface. */
+  def chamferOneSided(from: TriangleMesh[_3D], to: TriangleMesh[_3D]): Double = {
+    val d = surfaceDistances(from, to)
+    d.sum / d.length
+  }
+
+  /** Symmetric Chamfer L1: mean of both one-sided means. */
+  def chamferL1(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double =
+    (chamferOneSided(a, b) + chamferOneSided(b, a)) / 2.0
+
+  /** Symmetric Chamfer L2 (squared): mean of squared min-distances, both directions. */
+  def chamferL2(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    def sq(m: TriangleMesh[_3D], n: TriangleMesh[_3D]): Double = {
+      val d = surfaceDistances(m, n)
+      d.map(x => x * x).sum / d.length
+    }
+    (sq(a, b) + sq(b, a)) / 2.0
+  }
+
+  final case class FullDistStats(
+    surfMean: Double, surfRms: Double, surfHd95: Double, surfHd: Double,
+    p2pMean: Double, p2pRmse: Double, p2pMax: Double,
+    chamferL1: Double, chamferL2: Double
+  ) {
+    def csvRow(id: String): String =
+      f"$id,$surfMean%.4f,$surfRms%.4f,$surfHd95%.4f,$surfHd%.4f,$p2pMean%.4f,$p2pRmse%.4f,$p2pMax%.4f,$chamferL1%.4f,$chamferL2%.4f"
+  }
+  object FullDistStats {
+    val csvHeader: String =
+      "id,surf_mean,surf_rms,surf_hd95,surf_hd,p2p_mean,p2p_rmse,p2p_max,chamfer_l1,chamfer_l2"
+  }
+
+  /** All metrics combined.
+   *  @param registered  GP-ICP output (same topology as `meanRef`)
+   *  @param original    rigid-aligned specimen (surface-comparison target)
+   *  @param meanRef     SSM mean or pass-2 reference (P2P comparison partner, same topology as registered)
+   */
+  def fullStats(
+    registered: TriangleMesh[_3D],
+    original:   TriangleMesh[_3D],
+    meanRef:    TriangleMesh[_3D]
+  ): FullDistStats = {
+    val ss  = symmetric(registered, original)
+    val p2p = correspondingStats(registered, meanRef)
+    FullDistStats(
+      surfMean  = ss.mean, surfRms = ss.rms, surfHd95 = ss.hd95, surfHd = ss.hd,
+      p2pMean   = p2p.mean, p2pRmse = p2p.rmse, p2pMax = p2p.max,
+      chamferL1 = chamferL1(registered, original),
+      chamferL2 = chamferL2(registered, original)
+    )
   }
 }
