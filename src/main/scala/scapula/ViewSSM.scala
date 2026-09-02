@@ -30,7 +30,7 @@ object ViewSSM {
       .readStatisticalMeshModel(modelFile)
       .getOrElse(throw new RuntimeException(s"Could not read ${modelFile.getName}"))
 
-    println(s"  ${model.rank} modes  |  ${model.reference.pointSet.numberOfPoints} vertices")
+    println(s"  ${model.rank} modes  |  ${model.referenceMesh.pointSet.numberOfPoints} vertices")
 
     val ui = ScalismoUI("Scapula SSM Viewer")
 
