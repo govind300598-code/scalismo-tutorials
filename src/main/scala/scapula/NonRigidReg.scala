@@ -29,7 +29,7 @@ object NonRigidReg {
       reference,
       gp,
       relativeTolerance = 0.01,
-      interpolator      = NearestNeighborInterpolator3D[EuclideanVector[_3D]]()
+      interpolator      = NearestNeighborInterpolator3D[TriangleMesh, EuclideanVector[_3D]]()
     )
     val discreteGP = lowRankGP.discretize(reference)
     println(s"  GP rank: ${discreteGP.rank}")
