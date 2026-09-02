@@ -76,16 +76,20 @@ def load_registered_meshes(out_dir: Path) -> dict:
     if not stl_files:
         sys.exit(f"ERROR: No STL files found in {out_dir}\n"
                  f"Make sure SCAPULA_OUT_DIR points to the folder containing the registered meshes.")
-    meshes = {}
+    raw = {}
     for f in tqdm(stl_files, desc="Loading meshes"):
         sid = f.stem[4:] if f.stem.startswith("reg_") else f.stem
-        meshes[sid] = trimesh.load(str(f), process=False)
-    print(f"  Loaded {len(meshes)} registered meshes")
-    nv = next(iter(meshes.values())).vertices.shape[0]
-    for sid, m in meshes.items():
-        assert m.vertices.shape[0] == nv, \
-            f"Mesh {sid} has {m.vertices.shape[0]} vertices, expected {nv}"
-    print(f"  Vertices per mesh: {nv}")
+        raw[sid] = trimesh.load(str(f), process=False)
+
+    # keep only meshes that share the most common vertex count
+    from collections import Counter
+    vc = Counter(m.vertices.shape[0] for m in raw.values())
+    nv, count = vc.most_common(1)[0]
+    skipped = [sid for sid, m in raw.items() if m.vertices.shape[0] != nv]
+    if skipped:
+        print(f"  WARNING: skipping {len(skipped)} mesh(es) with different vertex counts: {skipped}")
+    meshes = {sid: m for sid, m in raw.items() if m.vertices.shape[0] == nv}
+    print(f"  Loaded {len(meshes)} registered meshes  |  vertices per mesh: {nv}")
     return meshes
 
 

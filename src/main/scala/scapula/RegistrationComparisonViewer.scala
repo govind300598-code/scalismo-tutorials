@@ -102,6 +102,9 @@ object RegistrationComparisonViewer {
     println(s"GP prior rank: ${gpPrior.rank}")
 
     // ---------------------------------------------------------------- register all (excluding reference)
+    val outDir = Config.outDir
+    outDir.mkdirs()
+
     val targets = specimens.filterNot(_.modelId == refSpec.modelId)
     println(s"\nRegistering ${targets.length} target specimens...\n")
 
@@ -157,8 +160,6 @@ object RegistrationComparisonViewer {
     println(f"  Worst Case     : ${worst.specimenId}  (RMS=${worst.rmsMm}%.3f mm)")
 
     // ---------------------------------------------------------------- save CSV
-    val outDir = Config.outDir
-    outDir.mkdirs()
     Evaluate.saveCsv(
       Seq(Seq("specimen", "rms_mm", "hd95_mm")) ++
         ranked.map(r => Seq(r.specimenId, f"${r.rmsMm}%.4f", f"${r.hd95Mm}%.4f")),
