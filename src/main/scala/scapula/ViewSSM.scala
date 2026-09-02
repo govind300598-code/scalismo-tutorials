@@ -26,9 +26,12 @@ object ViewSSM {
     require(modelFile.exists(), s"SSM file not found: ${modelFile.getAbsolutePath}\nRun FullPipeline first.")
 
     println(s"Loading SSM from: ${modelFile.getAbsolutePath}")
-    val model = StatisticalModelIO
-      .readStatisticalMeshModel(modelFile)
-      .getOrElse(throw new RuntimeException(s"Could not read ${modelFile.getName}"))
+    val model = StatisticalModelIO.readStatisticalMeshModel(modelFile) match {
+      case scala.util.Success(m) => m
+      case scala.util.Failure(e) =>
+        e.printStackTrace()
+        throw new RuntimeException(s"readStatisticalMeshModel failed: ${e.getMessage}", e)
+    }
 
     println(s"  ${model.rank} modes  |  ${model.referenceMesh.pointSet.numberOfPoints} vertices")
 
