@@ -92,18 +92,22 @@ object ViewRegistration {
     }
     val sorted = metrics.sortBy(_.meanD)
 
-    val colW = math.max(45, sorted.map(_.name.length).max + 2)
-    val sep  = "─" * (colW + 58)
+    val colW   = math.max(45, sorted.map(_.name.length).max + 2)
+    val sep    = "─" * (colW + 60)
+    val hdrFmt = s"  %-${colW}s  %9s  %9s  %9s  %9s  %9s"
+    val rowFmt = s"  %-${colW}s  %9.3f  %9.3f  %9.3f  %9.3f  %9.3f"
     println(s"\n$sep")
-    println(f"  ${"Specimen"}%-${colW}s  ${"Mean(mm)":>9}  ${"RMSE":>9}  ${"HD95":>9}  ${"HD":>9}  ${"Chamfer":>9}")
+    println(hdrFmt.format("Specimen", "Mean(mm)", "RMSE", "HD95", "HD", "Chamfer"))
     println(sep)
     sorted.foreach { m =>
-      println(f"  ${m.name}%-${colW}s  ${m.meanD}%9.3f  ${m.rms}%9.3f  ${m.hd95}%9.3f  ${m.hd}%9.3f  ${m.chamfer}%9.3f")
+      println(rowFmt.format(m.name, m.meanD, m.rms, m.hd95, m.hd, m.chamfer))
     }
     val k = metrics.length.toDouble
     println(sep)
-    println(f"  ${"AVERAGE"}%-${colW}s  ${metrics.map(_.meanD).sum/k}%9.3f  ${metrics.map(_.rms).sum/k}%9.3f  ${metrics.map(_.hd95).sum/k}%9.3f  ${metrics.map(_.hd).sum/k}%9.3f  ${metrics.map(_.chamfer).sum/k}%9.3f")
-    println(s"$sep\n  Note: distances are point-to-point vs. SSM mean shape (all specimens in correspondence)")
+    println(rowFmt.format("AVERAGE",
+      metrics.map(_.meanD).sum/k, metrics.map(_.rms).sum/k,
+      metrics.map(_.hd95).sum/k, metrics.map(_.hd).sum/k, metrics.map(_.chamfer).sum/k))
+    println(s"$sep\n  Note: point-to-point distances vs. SSM mean shape")
 
     // ── 4. Load & rigidly align original STLs for registration comparison ─────
     println("\nLoading landmark CSV and original meshes for registration comparison...")
@@ -155,7 +159,7 @@ object ViewRegistration {
     ui.show(ui.createGroup("Mean shape"),    mean,  "mean")
 
     val nShow = math.min(3, sorted.length)
-    val meshByName = (regMeshes zip regIds).toMap
+    val meshByName = (regIds zip regMeshes).toMap   // Map[String, TriangleMesh[_3D]]
 
     // Best cases — registered vs original
     val bReg  = ui.createGroup("Best / Registered")
