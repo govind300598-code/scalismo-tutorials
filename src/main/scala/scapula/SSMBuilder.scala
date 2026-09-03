@@ -2,9 +2,10 @@ package scapula
 
 import breeze.linalg.DenseVector
 import scalismo.geometry._3D
-import scalismo.io.StatisticalModelIO
+import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.PointDistributionModel
+import scalismo.numerics.PivotedCholesky
+import scalismo.statisticalmodel.StatisticalMeshModel
 import scalismo.statisticalmodel.dataset.DataCollection
 
 import java.io.{File, PrintWriter}
@@ -13,31 +14,29 @@ import java.io.{File, PrintWriter}
 object SSMBuilder {
 
   /**
-   * Build SSM via PCA from registered meshes that are already in dense correspondence
-   * (same topology, same vertex ordering) with each other.
-   *
+   * Build SSM via PCA from registered meshes already in dense correspondence.
    * All meshes MUST share the same reference mesh topology.
    */
   def buildFromCorrespondences(
     registeredMeshes: IndexedSeq[TriangleMesh[_3D]]
-  ): PointDistributionModel[_3D, TriangleMesh] = {
+  ): StatisticalMeshModel = {
     require(registeredMeshes.nonEmpty, "no registered meshes supplied")
     val reference = registeredMeshes.head
-    val (dc, errs) = DataCollection.fromMeshSequence(reference, registeredMeshes)
-    if (errs.nonEmpty) println(s"  WARNING: ${errs.length} mesh conversion error(s) ignored")
-    PointDistributionModel.createUsingPCA(dc)
+    val dc = DataCollection.fromTriangleMesh3DSequence(reference, registeredMeshes)
+    StatisticalMeshModel.createUsingPCA(dc, PivotedCholesky.RelativeTolerance(0))
+      .getOrElse(throw new RuntimeException("PCA failed"))
   }
 
   /** Compute and print basic variance/compactness metrics. Returns the table as a string. */
-  def varianceReport(model: PointDistributionModel[_3D, TriangleMesh], label: String): String = {
-    val v         = model.variance
-    val total     = v.sum
-    val pct       = v.map(_ / total * 100.0)
-    val cumPct    = pct.toArray.scanLeft(0.0)(_ + _).tail
+  def varianceReport(model: StatisticalMeshModel, label: String): String = {
+    val eigenvalues = model.gp.klBasis.map(_.eigenvalue)
+    val total       = eigenvalues.sum
+    val pct         = eigenvalues.map(_ / total * 100.0)
+    val cumPct      = pct.scanLeft(0.0)(_ + _).tail.toIndexedSeq
 
-    val mode1     = pct(0)
-    val top5      = cumPct(math.min(4, cumPct.length - 1))
-    val top10     = cumPct(math.min(9, cumPct.length - 1))
+    val mode1  = pct(0)
+    val top5   = cumPct(math.min(4, cumPct.length - 1))
+    val top10  = cumPct(math.min(9, cumPct.length - 1))
 
     val sb = new StringBuilder
     sb.append(s"\n[$label] PCA variance report  (rank = ${model.rank})\n")
@@ -54,10 +53,6 @@ object SSMBuilder {
 
   /**
    * Generalization error: leave-one-out reconstruction.
-   * For each mesh, fit the model built WITHOUT that mesh by computing the closest point
-   * in model-space, then measure the residual surface distance.
-   *
-   * This is the standard generalization metric: lower is better.
    */
   def generalizationError(
     meshes: IndexedSeq[TriangleMesh[_3D]],
@@ -69,15 +64,16 @@ object SSMBuilder {
     }
     val errors = meshes.zipWithIndex.map { case (testMesh, i) =>
       val trainMeshes = meshes.patch(i, Nil, 1)
-      val (trainDc, _) = DataCollection.fromMeshSequence(trainMeshes.head, trainMeshes)
-      val loo          = PointDistributionModel.createUsingPCA(trainDc)
-      // Project test mesh onto model: condition on all vertex observations, σ²=0.5
+      val trainDc     = DataCollection.fromTriangleMesh3DSequence(trainMeshes.head, trainMeshes)
+      val loo         = StatisticalMeshModel
+        .createUsingPCA(trainDc, PivotedCholesky.RelativeTolerance(0))
+        .getOrElse(throw new RuntimeException("LOO PCA failed"))
       val observations = testMesh.pointSet.pointIds.toIndexedSeq.map { ptId =>
         (ptId, testMesh.pointSet.point(ptId))
       }
-      val posterior  = loo.posterior(observations, 0.5)
-      val projected  = posterior.mean
-      val d          = Metrics.surfaceDistances(testMesh, projected)
+      val posterior = loo.posterior(observations, 0.5)
+      val projected = posterior.mean
+      val d         = Metrics.surfaceDistances(testMesh, projected)
       d.sum / d.length
     }
     val meanError = errors.sum / errors.length
@@ -86,11 +82,10 @@ object SSMBuilder {
   }
 
   /**
-   * Specificity: sample random instances from the model and measure how close they
-   * are to the nearest training shape. Lower is better (samples look like real shapes).
+   * Specificity: sample random instances and measure distance to nearest training shape.
    */
   def specificityError(
-    model: PointDistributionModel[_3D, TriangleMesh],
+    model: StatisticalMeshModel,
     trainingMeshes: IndexedSeq[TriangleMesh[_3D]],
     nSamples: Int = 50,
     label: String
@@ -123,34 +118,34 @@ object SSMBuilder {
   }
 
   def computeMetrics(
-    model: PointDistributionModel[_3D, TriangleMesh],
+    model: StatisticalMeshModel,
     trainingMeshes: IndexedSeq[TriangleMesh[_3D]],
     label: String
   )(implicit rng: scalismo.utils.Random): SSMMetrics = {
-    val v      = model.variance
-    val total  = v.sum
-    val pct    = v.map(_ / total * 100.0)
-    val cumPct = pct.toArray.scanLeft(0.0)(_ + _).tail
+    val eigenvalues = model.gp.klBasis.map(_.eigenvalue)
+    val total       = eigenvalues.sum
+    val pct         = eigenvalues.map(_ / total * 100.0)
+    val cumPct      = pct.scanLeft(0.0)(_ + _).tail.toIndexedSeq
 
-    val mode1  = pct(0)
-    val top5   = cumPct(math.min(4, cumPct.length - 1))
-    val top10  = cumPct(math.min(9, cumPct.length - 1))
-    val gen    = generalizationError(trainingMeshes, label)
-    val spc    = specificityError(model, trainingMeshes, label = label)
+    val mode1 = pct(0)
+    val top5  = cumPct(math.min(4, cumPct.length - 1))
+    val top10 = cumPct(math.min(9, cumPct.length - 1))
+    val gen   = generalizationError(trainingMeshes, label)
+    val spc   = specificityError(model, trainingMeshes, label = label)
 
     SSMMetrics(label, model.rank, mode1, top5, top10, gen, spc)
   }
 
-  def saveModel(model: PointDistributionModel[_3D, TriangleMesh], file: File): Unit = {
+  def saveModel(model: StatisticalMeshModel, file: File): Unit = {
     file.getParentFile.mkdirs()
     StatisticalModelIO.writeStatisticalMeshModel(model, file)
       .getOrElse(throw new RuntimeException(s"Failed to save model to ${file.getPath}"))
     println(s"  Saved model → ${file.getPath}")
   }
 
-  def saveMean(model: PointDistributionModel[_3D, TriangleMesh], file: File): Unit = {
+  def saveMean(model: StatisticalMeshModel, file: File): Unit = {
     file.getParentFile.mkdirs()
-    scalismo.io.MeshIO.writeMesh(model.mean, file)
+    MeshIO.writeMesh(model.mean, file)
       .getOrElse(throw new RuntimeException(s"Failed to save mean to ${file.getPath}"))
     println(s"  Saved mean  → ${file.getPath}")
   }

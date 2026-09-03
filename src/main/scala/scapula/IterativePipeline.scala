@@ -3,7 +3,7 @@ package scapula
 import scalismo.geometry._3D
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{LowRankGaussianProcess, PointDistributionModel}
+import scalismo.statisticalmodel.{LowRankGaussianProcess, StatisticalMeshModel}
 import scalismo.utils.Random
 
 import java.io.{File, PrintWriter}
@@ -56,7 +56,7 @@ object IterativePipeline {
     landmarks: Map[String, IndexedSeq[scalismo.geometry.Landmark[_3D]]],
     outDir: File,
     lowRankGP: LowRankGaussianProcess[_3D, scalismo.geometry.EuclideanVector[_3D]]
-  )(implicit rng: Random): (PointDistributionModel[_3D, TriangleMesh], TriangleMesh[_3D], IndexedSeq[TriangleMesh[_3D]]) = {
+  )(implicit rng: Random): (StatisticalMeshModel, TriangleMesh[_3D], IndexedSeq[TriangleMesh[_3D]]) = {
 
     val t0 = System.currentTimeMillis()
     println(s"\n" + "=" * 80)
@@ -157,7 +157,7 @@ object IterativePipeline {
   // ---------------------------------------------------------------------------
 
   def saveModeDeformations(
-    ssm: PointDistributionModel[_3D, TriangleMesh],
+    ssm: StatisticalMeshModel,
     outDir: File,
     label: String
   ): Unit = {
@@ -166,7 +166,7 @@ object IterativePipeline {
     for (modeIdx <- 0 until nModes) {
       for (alpha <- Seq(-3.0, 0.0, 3.0)) {
         val coeffs = DenseVector.zeros[Double](ssm.rank)
-        coeffs(modeIdx) = alpha * math.sqrt(ssm.variance(modeIdx))
+        coeffs(modeIdx) = alpha * math.sqrt(ssm.gp.klBasis(modeIdx).eigenvalue)
         val shape = ssm.instance(coeffs)
         val tag   = if (alpha < 0) s"minus${(-alpha).toInt}sd" else if (alpha == 0.0) "mean" else s"plus${alpha.toInt}sd"
         MeshIO.writeMesh(shape, new File(outDir, s"${label}_mode${modeIdx + 1}_${tag}.stl"))

@@ -7,7 +7,9 @@ import scalismo.geometry.{EuclideanVector, Landmark, _3D}
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
+import scalismo.numerics.PivotedCholesky
+import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, StatisticalMeshModel}
+import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
@@ -15,16 +17,7 @@ import java.io.File
 
 /**
  * Utility to rebuild or refine an SSM from existing registered meshes.
- *
- * Fixed for scalismo 0.92 API:
- *  - ScalismoUI is in scalismo.ui.api (not scalismo.ui)
- *  - EuclideanSpace3D is not needed; use the kernel-only GaussianProcess constructor
- *  - GaussianProcess vectorizer must be explicit to avoid ambiguous given instances
- *  - LowRankGaussianProcess.approximateGPCholesky takes TriangleMesh (DiscreteDomain),
- *    NOT mesh.pointSet (UnstructuredPoints is not DiscreteDomain in 0.92)
- *  - StatisticalMeshModel uses .referenceMesh (not .reference)
- *
- * Run with: sbt "runMain scapula.RebuildSSM"
+ * Run with: sbt "runMain scapula.RebuildSSM [SSM1|SSM2|SSM3|SSM4]"
  */
 object RebuildSSM {
 
@@ -35,7 +28,6 @@ object RebuildSSM {
     val outDir     = Config.outDir
     val resultsDir = new File(outDir, "results")
 
-    // ── Load registered meshes from an existing SSM pass ─────────────────────
     val ssmPass = args.headOption.getOrElse("SSM1")
     val nrDir   = new File(resultsDir, s"$ssmPass/nonrigid_registered")
 
@@ -57,8 +49,9 @@ object RebuildSSM {
 
     // ── Rebuild SSM via PCA ───────────────────────────────────────────────────
     println("Building SSM via PCA …")
-    val (dc, _) = scalismo.statisticalmodel.dataset.DataCollection.fromMeshSequence(meshes.head, meshes)
-    val ssm = PointDistributionModel.createUsingPCA(dc)
+    val dc  = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
+    val ssm = StatisticalMeshModel.createUsingPCA(dc, PivotedCholesky.RelativeTolerance(0))
+      .getOrElse(throw new RuntimeException("PCA failed"))
     println(s"  rank = ${ssm.rank},  n = ${meshes.length}")
 
     // ── Variance report ───────────────────────────────────────────────────────
@@ -71,14 +64,11 @@ object RebuildSSM {
       .getOrElse(println(s"WARNING: could not save model to ${modelFile.getPath}"))
     println(s"Saved rebuilt model → ${modelFile.getPath}")
 
-    // ── Optionally compute GPMM prior and show generalization ─────────────────
+    // ── Build GPMM prior on reference mesh ────────────────────────────────────
     println("\nBuilding GP prior on reference mesh …")
-    val reference = ssm.mean
-
+    val reference    = ssm.mean
     val scalarKernel = GaussianKernel[_3D](NonRigidReg.gpSigma) * (NonRigidReg.gpScaleFactor * NonRigidReg.gpScaleFactor)
     val matKernel    = DiagonalKernel(scalarKernel, 3)
-
-    // NOTE: pass `reference` (TriangleMesh, which IS a DiscreteDomain) — NOT reference.pointSet
     val gp: GaussianProcess[_3D, EuclideanVector[_3D]] = GaussianProcess(matKernel)
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       reference,
@@ -98,7 +88,8 @@ object RebuildSSM {
 
     // ── Mode deformation meshes ───────────────────────────────────────────────
     val modesDir = new File(resultsDir, s"$ssmPass/PCA_modes")
-    SSMBuilder.saveModeDeformations(ssm, modesDir, ssmPass)
+    modesDir.mkdirs()
+    IterativePipeline.saveModeDeformations(ssm, modesDir, ssmPass)
 
     // ── Visualise in Scalismo UI ──────────────────────────────────────────────
     if (Config.showUi) {
@@ -106,10 +97,9 @@ object RebuildSSM {
       val group = ui.createGroup(ssmPass)
       ui.show(group, ssm.mean: TriangleMesh[_3D], s"${ssmPass}_mean")
 
-      // Show three mode deformations
       val nModes = math.min(3, ssm.rank)
       for (modeIdx <- 0 until nModes) {
-        val stdDev = math.sqrt(ssm.variance(modeIdx))
+        val stdDev = math.sqrt(ssm.gp.klBasis(modeIdx).eigenvalue)
         for (alpha <- Seq(-3.0, 0.0, 3.0)) {
           val coeffs = DenseVector.zeros[Double](ssm.rank)
           coeffs(modeIdx) = alpha * stdDev

@@ -3,7 +3,7 @@ package scapula
 import breeze.linalg.DenseVector
 import scalismo.geometry._3D
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.PointDistributionModel
+import scalismo.statisticalmodel.StatisticalMeshModel
 import scalismo.ui.api.ScalismoUI
 
 import java.io.File
@@ -28,10 +28,10 @@ object VisualizationApp {
 
   private def stlsIn(d: File, limit: Int = 5): IndexedSeq[File] =
     if (!d.exists()) IndexedSeq.empty
-    else Option(d.listFiles()).getOrElse(Array.empty).filter(_.getName.endsWith(".stl"))
+    else Option(d.listFiles()).getOrElse(Array.empty[File]).filter(_.getName.endsWith(".stl"))
       .sortBy(_.getName).take(limit).toIndexedSeq
 
-  private def loadModel(f: File): Option[PointDistributionModel[_3D, TriangleMesh]] =
+  private def loadModel(f: File): Option[StatisticalMeshModel] =
     if (!f.exists()) None
     else scalismo.io.StatisticalModelIO.readStatisticalMeshModel(f).toOption
 
@@ -95,7 +95,7 @@ object VisualizationApp {
           println(s"$label rank=${ssm.rank}, showing modes 1-$nModes (±3σ)")
 
           for (modeIdx <- 0 until nModes) {
-            val stdDev = math.sqrt(ssm.variance(modeIdx))
+            val stdDev = math.sqrt(ssm.gp.klBasis(modeIdx).eigenvalue)
             for (alpha <- Seq(-3.0, 0.0, 3.0)) {
               val coeffs = DenseVector.zeros[Double](ssm.rank)
               coeffs(modeIdx) = alpha * stdDev
