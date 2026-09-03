@@ -2,6 +2,7 @@ package scapula
 
 import scalismo.geometry.*
 import scalismo.mesh.*
+import scalismo.common.PointId
 import scalismo.io.MeshIO
 import scalismo.numerics.UniformMeshSampler3D
 import scalismo.registration.LandmarkRegistration
