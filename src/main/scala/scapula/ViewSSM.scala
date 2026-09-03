@@ -58,7 +58,7 @@ object ViewSSM {
             f"| rank = ${model.rank}  | vertices = ${model.reference.pointSet.numberOfPoints}")
 
     // Quick variance summary
-    val eigenvalues = model.gp.eigenvalues.toArray
+    val eigenvalues = model.gp.klBasis.map(_.eigenvalue).toArray
     val totalVar    = eigenvalues.sum
     val cumVar      = eigenvalues.scanLeft(0.0)(_ + _).tail.map(_ / totalVar * 100.0)
     def modesFor(pct: Double): Int = { val i = cumVar.indexWhere(_ >= pct); if (i < 0) model.rank else i + 1 }

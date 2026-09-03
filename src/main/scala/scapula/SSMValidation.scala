@@ -79,7 +79,7 @@ object SSMValidation {
     println(f"  rank = ${model.rank}  |  elapsed = ${(System.currentTimeMillis() - t0) / 1000.0}%.1f s")
 
     val nModes      = model.rank
-    val eigenvalues = model.gp.eigenvalues.toArray
+    val eigenvalues = model.gp.klBasis.map(_.eigenvalue).toArray
     val totalVar    = eigenvalues.sum
     val meanMesh    = model.mean
 
