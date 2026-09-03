@@ -2,12 +2,12 @@ package scapula
 
 import breeze.linalg.DenseVector
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
-import scalismo.common.{PointId, Vectorizer}
-import scalismo.geometry.{EuclideanVector, EuclideanVector3D, Landmark, _3D}
+import scalismo.common.PointId
+import scalismo.geometry.{EuclideanVector, Landmark, _3D}
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
-import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel, StatisticalMeshModel}
+import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
@@ -45,7 +45,7 @@ object RebuildSSM {
       System.exit(1)
     }
 
-    val meshFiles = Option(nrDir.listFiles()).getOrElse(Array.empty)
+    val meshFiles = Option(nrDir.listFiles()).getOrElse(Array.empty[File])
       .filter(_.getName.endsWith(".stl"))
       .sortBy(_.getName)
       .toIndexedSeq
@@ -57,7 +57,8 @@ object RebuildSSM {
 
     // ── Rebuild SSM via PCA ───────────────────────────────────────────────────
     println("Building SSM via PCA …")
-    val ssm = PointDistributionModel.createUsingPCA(meshes)
+    val (dc, _) = scalismo.statisticalmodel.dataset.DataCollection.fromMeshSequence(meshes.head, meshes)
+    val ssm = PointDistributionModel.createUsingPCA(dc)
     println(s"  rank = ${ssm.rank},  n = ${meshes.length}")
 
     // ── Variance report ───────────────────────────────────────────────────────
@@ -73,11 +74,6 @@ object RebuildSSM {
     // ── Optionally compute GPMM prior and show generalization ─────────────────
     println("\nBuilding GP prior on reference mesh …")
     val reference = ssm.mean
-
-    // Explicit Vectorizer to resolve the ambiguous given instances error.
-    // (scalismo exposes ShortVectorizer and IntVectorizer for internal use;
-    //  specifying the vectorizer here tells the compiler exactly which to use.)
-    given Vectorizer[EuclideanVector[_3D]] = EuclideanVector3D.vectorizer
 
     val scalarKernel = GaussianKernel[_3D](NonRigidReg.gpSigma) * (NonRigidReg.gpScaleFactor * NonRigidReg.gpScaleFactor)
     val matKernel    = DiagonalKernel(scalarKernel, 3)
@@ -108,7 +104,7 @@ object RebuildSSM {
     if (Config.showUi) {
       val ui    = ScalismoUI(s"RebuildSSM – $ssmPass")
       val group = ui.createGroup(ssmPass)
-      ui.show(group, ssm.mean, s"${ssmPass}_mean")
+      ui.show(group, ssm.mean: TriangleMesh[_3D], s"${ssmPass}_mean")
 
       // Show three mode deformations
       val nModes = math.min(3, ssm.rank)
@@ -119,7 +115,7 @@ object RebuildSSM {
           coeffs(modeIdx) = alpha * stdDev
           val shape = ssm.instance(coeffs)
           val tag   = if (alpha < 0) s"m${(-alpha).toInt}sd" else if (alpha == 0.0) "mean" else s"p${alpha.toInt}sd"
-          ui.show(group, shape, s"mode${modeIdx + 1}_$tag")
+          ui.show(group, shape: TriangleMesh[_3D], s"mode${modeIdx + 1}_$tag")
         }
       }
 

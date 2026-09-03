@@ -5,6 +5,7 @@ import scalismo.geometry._3D
 import scalismo.io.StatisticalModelIO
 import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.PointDistributionModel
+import scalismo.statisticalmodel.dataset.DataCollection
 
 import java.io.{File, PrintWriter}
 
@@ -21,7 +22,10 @@ object SSMBuilder {
     registeredMeshes: IndexedSeq[TriangleMesh[_3D]]
   ): PointDistributionModel[_3D, TriangleMesh] = {
     require(registeredMeshes.nonEmpty, "no registered meshes supplied")
-    PointDistributionModel.createUsingPCA(registeredMeshes)
+    val reference = registeredMeshes.head
+    val (dc, errs) = DataCollection.fromMeshSequence(reference, registeredMeshes)
+    if (errs.nonEmpty) println(s"  WARNING: ${errs.length} mesh conversion error(s) ignored")
+    PointDistributionModel.createUsingPCA(dc)
   }
 
   /** Compute and print basic variance/compactness metrics. Returns the table as a string. */
@@ -65,7 +69,8 @@ object SSMBuilder {
     }
     val errors = meshes.zipWithIndex.map { case (testMesh, i) =>
       val trainMeshes = meshes.patch(i, Nil, 1)
-      val loo         = PointDistributionModel.createUsingPCA(trainMeshes)
+      val (trainDc, _) = DataCollection.fromMeshSequence(trainMeshes.head, trainMeshes)
+      val loo          = PointDistributionModel.createUsingPCA(trainDc)
       // Project test mesh onto model: condition on all vertex observations, σ²=0.5
       val observations = testMesh.pointSet.pointIds.toIndexedSeq.map { ptId =>
         (ptId, testMesh.pointSet.point(ptId))

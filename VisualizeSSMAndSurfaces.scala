@@ -47,7 +47,7 @@ object VisualizeSSMAndSurfaces {
     if (dataDir.exists()) {
       val surfGroup = ui.createGroup("Surfaces")
       Option(dataDir.listFiles())
-        .getOrElse(Array.empty)
+        .getOrElse(Array.empty[java.io.File])
         .filter(_.getName.endsWith(".stl"))
         .sortBy(_.getName)
         .take(6)
