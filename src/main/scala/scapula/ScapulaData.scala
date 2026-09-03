@@ -21,7 +21,7 @@ object Config {
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
 
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
@@ -194,6 +194,26 @@ object ScapulaData {
 
   def loadMesh(f: File): TriangleMesh[_3D] =
     MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Could not read mesh ${f.getPath}"))
+
+  /**
+   * Decimate `reference` to `targetVertices` vertices and apply the SAME vertex selection to
+   * every mesh in `meshes`.  All returned meshes share the decimated topology, so point-to-point
+   * correspondence is preserved — required for PCA and per-vertex distance metrics.
+   *
+   * The returned sequence has the same length as `meshes`.  The first element corresponds to
+   * `meshes.head` (which should normally be the same mesh as `reference`).
+   */
+  def decimateInCorrespondence(
+      reference: TriangleMesh[_3D],
+      meshes: IndexedSeq[TriangleMesh[_3D]],
+      targetVertices: Int
+  ): IndexedSeq[TriangleMesh[_3D]] = {
+    val decRef   = reference.operations.decimate(targetVertices)
+    val keptIds  = decRef.pointSet.points.toIndexedSeq
+                     .map(p => reference.pointSet.findClosestPoint(p).id)
+    val topology = decRef.triangulation
+    meshes.map(m => TriangleMesh3D(keptIds.map(id => m.pointSet.point(id)), topology))
+  }
 }
 
 /** Surface-distance measures. Kept separate from MeshMetrics so the directionality is explicit. */

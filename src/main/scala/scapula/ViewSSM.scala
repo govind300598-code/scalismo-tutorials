@@ -50,9 +50,20 @@ object ViewSSM {
     val nPts   = meshes.head.pointSet.numberOfPoints
     println(s"  ${meshes.length} meshes, $nPts vertices each")
 
+    val target = Config.modelResolution  // default 8000; override with SCAPULA_MODEL_RES
+    val workMeshes = if (nPts > target) {
+      println(s"Decimating $nPts → ~$target vertices (preserving correspondence)...")
+      val dec = ScapulaData.decimateInCorrespondence(meshes.head, meshes, target)
+      println(s"  Actual vertex count after decimation: ${dec.head.pointSet.numberOfPoints}")
+      dec
+    } else {
+      println(s"  Mesh already at or below $target vertices — skipping decimation")
+      meshes
+    }
+
     println("Building SSM in memory via PCA...")
     val t0    = System.currentTimeMillis()
-    val dc    = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
+    val dc    = DataCollection.fromTriangleMesh3DSequence(workMeshes.head, workMeshes)
     val model = PointDistributionModel.createUsingPCA(dc)
     println(f"  Done in ${(System.currentTimeMillis() - t0) / 1000.0}%.1f s  " +
             f"| rank = ${model.rank}  | vertices = ${model.reference.pointSet.numberOfPoints}")
@@ -72,7 +83,7 @@ object ViewSSM {
 
     ui.show(ssmGroup, model, "SSM")
     ui.show(meanGroup, model.mean, "mean")
-    meshes.zip(regFiles).foreach { case (m, f) =>
+    workMeshes.zip(regFiles).foreach { case (m, f) =>
       ui.show(specGroup, m, f.getName.stripSuffix(".stl"))
     }
 

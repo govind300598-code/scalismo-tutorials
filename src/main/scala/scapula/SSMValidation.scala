@@ -66,10 +66,21 @@ object SSMValidation {
     require(regFiles.nonEmpty, s"No reg_*.stl files found in ${pass2Dir.getAbsolutePath}")
 
     println(s"\nLoading ${regFiles.length} registered meshes from ${pass2Dir.getAbsolutePath}")
-    val names  = regFiles.map(_.getName.stripSuffix(".stl")).toIndexedSeq
-    val meshes = regFiles.map(ScapulaData.loadMesh).toIndexedSeq
-    val nPts   = meshes.head.pointSet.numberOfPoints
-    println(s"  ${meshes.length} meshes, $nPts vertices each")
+    val names   = regFiles.map(_.getName.stripSuffix(".stl")).toIndexedSeq
+    val rawMeshes = regFiles.map(ScapulaData.loadMesh).toIndexedSeq
+    val nPts    = rawMeshes.head.pointSet.numberOfPoints
+    println(s"  ${rawMeshes.length} meshes, $nPts vertices each")
+
+    val target = Config.modelResolution  // default 8000; override with SCAPULA_MODEL_RES
+    val meshes = if (nPts > target) {
+      println(s"Decimating $nPts → ~$target vertices (preserving correspondence)...")
+      val dec = ScapulaData.decimateInCorrespondence(rawMeshes.head, rawMeshes, target)
+      println(s"  Actual vertex count: ${dec.head.pointSet.numberOfPoints}")
+      dec
+    } else {
+      println(s"  Mesh already at or below $target vertices — skipping decimation")
+      rawMeshes
+    }
 
     // ── Build full SSM ───────────────────────────────────────────────────────
     println("\nBuilding SSM via PCA...")
