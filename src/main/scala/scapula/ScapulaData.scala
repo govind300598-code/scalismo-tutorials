@@ -41,6 +41,15 @@ object Config {
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
+  /** Gaussian kernel bandwidth (mm) — spatial extent of the deformation field. */
+  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "70.0").toDouble
+
+  /** Gaussian kernel output scale (mm) — controls the magnitude of allowed deformations. */
+  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "30.0").toDouble
+
+  /** Noise variance (mm²) for GP-ICP posterior regression. Lower = tighter fit. */
+  val icpSigma2: Double = env("SCAPULA_ICP_SIGMA2", "2.0").toDouble
+
   /**
    * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
    * are NOT statistically independent samples; including both inflates apparent sample size.
