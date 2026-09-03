@@ -2,8 +2,8 @@ package scapula
 
 import breeze.linalg.DenseVector
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
-import scalismo.common.PointId
-import scalismo.geometry.{EuclideanVector, Point, _3D}
+import scalismo.common.{PointId, Vectorizer}
+import scalismo.geometry.{EuclideanVector, EuclideanVector3D, Point, _3D}
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
@@ -61,13 +61,18 @@ object NonRigidReg {
     // Diagonal matrix-valued kernel: same kernel applied to x, y, z independently
     val matKernel = DiagonalKernel(scalarKernel, 3)
 
-    // GaussianProcess with zero mean and the diagonal Gaussian kernel
-    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](matKernel)
+    // Explicit vectorizer resolves ambiguous given instances (Short/Int vectorizers
+    // that scalismo exposes for internal use can confuse inference at this call site).
+    given ev: Vectorizer[EuclideanVector[_3D]] = EuclideanVector3D.vectorizer
+
+    // Zero-mean Gaussian Process over 3D displacement fields
+    val gp: GaussianProcess[_3D, EuclideanVector[_3D]] = GaussianProcess(matKernel)
 
     // Discretise at reference mesh vertices using NearestNeighborInterpolator3D
     // (see class-level scaladoc for why this interpolator is appropriate).
+    // TriangleMesh[_3D] implements DiscreteDomain[_3D] directly; do NOT pass .pointSet.
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-      reference.pointSet,
+      reference,
       gp,
       relativeTolerance = relativeTolerance,
       interpolator = NearestNeighborInterpolator3D()
