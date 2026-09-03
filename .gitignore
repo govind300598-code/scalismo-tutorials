@@ -2,3 +2,16 @@ target/
 project/target/
 project/project/
 .bsp/
+.idea/
+*.iml
+
+# Generated outputs – large binary/data files not committed
+results/
+data/preprocessing/
+comparison/*.vtk
+comparison/**/*.vtk
+**/*.h5
+
+# OS
+.DS_Store
+Thumbs.db

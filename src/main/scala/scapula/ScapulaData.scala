@@ -17,34 +17,31 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  // Input: folder containing STL files + the landmark CSV
+  val dataDir: File = new File(env("SCAPULA_DATA_DIR",
+    "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
 
-  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  // Root output folder; sub-folders are created automatically
+  val outDir: File = new File(env("SCAPULA_OUT_DIR",
+    "/home/g25upadh/Documents/100 plus scapula data/scapula_atlas_out"))
 
-  /** Non-rigid (GP) ICP iterations per pass. */
+  // ~8,000 vertices for the working/reference mesh (requirement: ~8k)
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
+
+  // Non-rigid GP-ICP iterations (used for both rigid ICP clean-up and NR ICP)
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
 
-  /**
-   * Number of registration passes. Pass 1 registers to an arbitrary specimen; each further pass rebuilds the reference
-   * as the mean of the previous pass and re-registers. This removes reference bias.
-   */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
-
-  /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
+  // Relative tolerance for pivoted-Cholesky low-rank GP approximation
   val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble
 
-  /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
+  // Hard cap on GP rank (memory bound)
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
-  /**
-   * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
-   * are NOT statistically independent samples; including both inflates apparent sample size.
-   */
-  val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
+  // If true, restrict SSM to one scapula per subject (true statistical independence)
+  val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "false").toBoolean
 
-  val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
+  // Launch Scalismo UI after pipeline finishes
+  val showUi: Boolean = env("SCAPULA_UI", "false").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
 }
