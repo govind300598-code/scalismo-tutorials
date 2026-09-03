@@ -257,7 +257,7 @@ object ScapulaData {
     // ── 4. Build coarse triangulation ─────────────────────────────────────────
     // One coarse triangle per original triangle that spans 3 distinct clusters.
     // Sort the cluster-triple to deduplicate regardless of vertex order.
-    val seen  = scala.collection.mutable.LinkedHashMap.empty[String, (Int, Int, Int)]()
+    val seen  = scala.collection.mutable.LinkedHashMap.empty[String, (Int, Int, Int)]
     reference.triangulation.triangles.foreach { t =>
       val ca = cluster(t.ptId1.id); val cb = cluster(t.ptId2.id); val cc = cluster(t.ptId3.id)
       if (ca >= 0 && cb >= 0 && cc >= 0 && ca != cb && ca != cc && cb != cc) {
