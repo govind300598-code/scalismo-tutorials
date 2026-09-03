@@ -44,14 +44,22 @@ object VisualizationApp {
 
     val ui = ScalismoUI("ScapulaAtlasRefinement – Iterative SSM Viewer")
 
-    // ── Original meshes ──────────────────────────────────────────────────────
-    val origGroup  = ui.createGroup("Original")
+    // ── Original meshes (all shown in LEFT-scapula frame) ────────────────────
+    val origGroup     = ui.createGroup("Original_AllLeft")
     val origSpecimens = ScapulaData.specimens(dataDir)
-    stlsIn(dataDir, limit = 6).foreach { f =>
-      val mesh = ScapulaData.loadMesh(f)
-      ui.show(origGroup, mesh, f.getName.stripSuffix(".stl"))
+    println(s"\nL/R classification for first specimens:")
+    origSpecimens.take(12).foreach { s =>
+      println(s"  ${s.modelId}  ->  ${if (s.isRight) "RIGHT (will mirror)" else "LEFT"}")
     }
-    println(s"Loaded ${math.min(6, origSpecimens.length)} original meshes into 'Original' group.")
+    stlsIn(dataDir, limit = 6).foreach { f =>
+      val id   = f.getName.stripSuffix(".stl")
+      val spec = origSpecimens.find(_.modelId == id).get
+      val raw  = ScapulaData.loadMesh(f)
+      val mesh = if (spec.isRight) ScapulaData.mirrorMesh(raw) else raw
+      val tag  = if (spec.isRight) s"${id}_MIRRORED" else id
+      ui.show(origGroup, mesh, tag)
+    }
+    println(s"Loaded ${math.min(6, origSpecimens.length)} original meshes into 'Original_AllLeft' group (R ones mirrored).")
 
     // ── SSM iterations ───────────────────────────────────────────────────────
     val means = scala.collection.mutable.ArrayBuffer.empty[(String, TriangleMesh[_3D])]
