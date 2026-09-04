@@ -1,6 +1,6 @@
 package scapula
 
-import scalismo.common.PointId
+import scalismo.common.{Field, PointId}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.io.MeshIO
@@ -53,15 +53,18 @@ object RebuildSSM {
     reference: TriangleMesh[_3D]
   )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
 
+    // EuclideanSpace3D is the concrete singleton for the 3D real domain
     val zeroMean = Field[_3D, EuclideanVector[_3D]](
-      EuclideanSpace[_3D], _ => EuclideanVector.zeros[_3D])
+      EuclideanSpace3D, _ => EuclideanVector.zeros[_3D])
 
     val scalarKernel = GaussianKernel[_3D](Config.kernelSigma) * Config.kernelScale
     val kernel       = DiagonalKernel(scalarKernel, outputDim = 3)
     val gp           = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
 
+    // Pass the TriangleMesh (not reference.pointSet) so the type matches
+    // NearestNeighborInterpolator3D which is typed for TriangleMesh domain.
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-      domain            = reference.pointSet,
+      domain            = reference,
       gp                = gp,
       relativeTolerance = Config.gpRelativeTolerance,
       interpolator      = NearestNeighborInterpolator3D()
