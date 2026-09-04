@@ -41,19 +41,28 @@ object Config {
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
-  /** Gaussian kernel bandwidth (mm) — spatial extent of the deformation field. */
-  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "70.0").toDouble
+  /**
+   * Gaussian kernel bandwidth (mm) — spatial extent of the deformation field.
+   * Smaller σ = more local deformations. 20 mm is appropriate for scapula sub-structure fitting.
+   */
+  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "20.0").toDouble
 
-  /** Gaussian kernel output scale (mm) — controls the magnitude of allowed deformations. */
-  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "30.0").toDouble
+  /**
+   * Gaussian kernel output scale (mm) — maximum magnitude of allowed deformations.
+   * 5 mm keeps the non-rigid step from overcorrecting after the rigid alignment.
+   */
+  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "5.0").toDouble
 
   /** Noise variance (mm²) for GP-ICP posterior regression. Lower = tighter fit. */
   val icpSigma2: Double = env("SCAPULA_ICP_SIGMA2", "2.0").toDouble
 
   /**
-   * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
-   * are NOT statistically independent samples; including both inflates apparent sample size.
+   * 0-based index into the sorted specimen list to use as the initial reference for pass 1.
+   * Default 1 = second specimen (paired_scapula_002). Override with SCAPULA_REF_IDX.
+   * For a female starting reference, set to the index of the first female specimen (~3).
    */
+  val refIdx: Int = env("SCAPULA_REF_IDX", "1").toInt
+
   val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
 
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean

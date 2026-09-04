@@ -180,18 +180,18 @@ object RebuildSSM {
     // ── Decimate initial reference to modelResolution ─────────────────────────
     // All passes work at the target resolution so the GP and SSM are never
     // built at the raw STL vertex count (which can be 50k+).
-    val initRef = preps.head
+    val initRef = preps(Config.refIdx.min(preps.length - 1))
     val initRefMesh: TriangleMesh[_3D] = {
       val n = initRef.mesh.pointSet.numberOfPoints
       if (n > Config.modelResolution) {
-        println(s"Decimating initial reference $n → ~${Config.modelResolution} vertices " +
+        println(s"Decimating initial reference [${initRef.modelId}] $n → ~${Config.modelResolution} vertices " +
                 s"(Voronoi coarsening)...")
         val dec = ScapulaData.decimateInCorrespondence(
           initRef.mesh, IndexedSeq(initRef.mesh), Config.modelResolution)
         println(s"  Actual: ${dec.head.pointSet.numberOfPoints} vertices")
         dec.head
       } else {
-        println(s"Initial reference: $n vertices (≤ ${Config.modelResolution}, no decimation needed)")
+        println(s"Initial reference [${initRef.modelId}]: $n vertices (≤ ${Config.modelResolution}, no decimation needed)")
         initRef.mesh
       }
     }
