@@ -3,7 +3,8 @@ package scapula
 import scalismo.geometry.*
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.*
-import scalismo.statisticalmodel.StatisticalMeshModel
+import scalismo.statisticalmodel.{PointDistributionModel, dataset}
+import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.utils.Random
 
 import java.io.{File, PrintWriter}
@@ -215,13 +216,14 @@ object FullPipeline {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  def buildSSM(reference: TriangleMesh[_3D], meshes: IndexedSeq[TriangleMesh[_3D]]): StatisticalMeshModel = {
+  def buildSSM(reference: TriangleMesh[_3D], meshes: IndexedSeq[TriangleMesh[_3D]]): PointDistributionModel[_3D, TriangleMesh] = {
     require(meshes.nonEmpty, "No meshes provided for SSM")
     require(
       meshes.forall(_.pointSet.numberOfPoints == reference.pointSet.numberOfPoints),
       "All registered meshes must have the same vertex count as the reference"
     )
-    StatisticalMeshModel.createUsingPCA(reference, meshes).get
+    val dc = DataCollection.fromTriangleMesh3DSequence(reference, meshes)
+    PointDistributionModel.createUsingPCA(dc)
   }
 
   private def banner(msg: String): Unit = {

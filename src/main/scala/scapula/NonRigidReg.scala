@@ -39,7 +39,7 @@ object NonRigidReg {
     val gp       = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
 
     LowRankGaussianProcess.approximateGPCholesky(
-      reference.pointSet,
+      reference,
       gp,
       relativeTolerance = Config.gpRelativeTolerance,
       interpolator       = NearestNeighborInterpolator3D()

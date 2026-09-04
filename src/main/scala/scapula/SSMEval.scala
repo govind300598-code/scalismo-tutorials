@@ -1,8 +1,10 @@
 package scapula
 
+import breeze.linalg.{DenseMatrix, DenseVector}
+import scalismo.common.*
 import scalismo.geometry.*
 import scalismo.mesh.*
-import scalismo.statisticalmodel.StatisticalMeshModel
+import scalismo.statisticalmodel.{MultivariateNormalDistribution, PointDistributionModel}
 import scalismo.utils.Random
 
 import java.io.{File, PrintWriter}
@@ -24,7 +26,7 @@ import scala.util.Using
 object SSMEval {
 
   def evaluate(
-      model:        StatisticalMeshModel,
+      model:        PointDistributionModel[_3D, TriangleMesh],
       ssmReference: TriangleMesh[_3D],
       pass1Pairs:   Map[String, TriangleMesh[_3D]],
       pass2Pairs:   Map[String, TriangleMesh[_3D]],
@@ -67,7 +69,7 @@ object SSMEval {
     // B. Compactness
     // -----------------------------------------------------------------------
     println("  [B] SSM compactness...")
-    val eigenvalues: IndexedSeq[Double] = model.gp.klBasis.map(_.eigenvalue)
+    val eigenvalues: IndexedSeq[Double] = model.gp.klBasis.map(_.eigenvalue).toIndexedSeq
     val totalVar                        = eigenvalues.sum
     val cumVarPct: IndexedSeq[Double]   = eigenvalues.scanLeft(0.0)(_ + _).tail.map(_ / totalVar * 100.0)
 
@@ -99,9 +101,13 @@ object SSMEval {
         val looModel     = FullPipeline.buildSSM(ssmReference, trainData)
 
         // Fit: observations = every corresponding vertex, noise variance = 1 mm²
-        val correspondences: IndexedSeq[(PointId, Point[_3D], Double)] =
+        val noiseModel = MultivariateNormalDistribution(
+          DenseVector.zeros[Double](3),
+          DenseMatrix.eye[Double](3) * 1.0
+        )
+        val correspondences: IndexedSeq[(PointId, Point[_3D], MultivariateNormalDistribution)] =
           ssmReference.pointSet.pointsWithId.map { case (_, pid) =>
-            (pid, holdOut.pointSet.point(pid), 1.0)
+            (pid, holdOut.pointSet.point(pid), noiseModel)
           }.toIndexedSeq
 
         val fittedModel = looModel.posterior(correspondences)
