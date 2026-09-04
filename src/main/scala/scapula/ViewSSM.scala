@@ -1,5 +1,6 @@
 package scapula
 
+import breeze.linalg.DenseVector
 import scalismo.geometry._3D
 import scalismo.mesh.{ScalarMeshField, TriangleMesh}
 import scalismo.statisticalmodel.PointDistributionModel
@@ -190,9 +191,34 @@ object ViewSSM {
         println(s"\n  → Click 'E_SSM_Interactive' → drag Mode 0 slider on right panel")
         println(s"     Mode 0 accounts for ${evs(0)/total*100.0f}%.1f%% of shape variance")
 
+        // ── G. Main modes of variance at ±1σ / ±2σ ────────────────────────
+        println(s"\n[G] Main modes of variance — showing top 3 modes at ±1σ and ±2σ")
+        println(f"  ${"Mode"}%5s  ${"σ (mm)"}%8s  ${"Var %"}%8s  ${"Shown as"}")
+        println("  " + "-" * 48)
+        val nModesToShow = math.min(3, model.rank)
+        val mean         = model.mean
+        (0 until nModesToShow).foreach { modeIdx =>
+          val ev     = evs(modeIdx)
+          val sigma  = math.sqrt(ev)
+          val varPct = ev / total * 100.0
+          println(f"  ${modeIdx+1}%5d  ${sigma}%8.3f  ${varPct}%8.2f  ±1σ + ±2σ meshes")
+
+          val coeffs1pos = Array.tabulate(model.rank)(j => if (j == modeIdx)  1.0 * sigma else 0.0)
+          val coeffs1neg = Array.tabulate(model.rank)(j => if (j == modeIdx) -1.0 * sigma else 0.0)
+          val coeffs2pos = Array.tabulate(model.rank)(j => if (j == modeIdx)  2.0 * sigma else 0.0)
+          val coeffs2neg = Array.tabulate(model.rank)(j => if (j == modeIdx) -2.0 * sigma else 0.0)
+
+          val modeGrp = ui.createGroup(s"G_Mode${modeIdx+1} (${varPct.toInt}%% var, σ=${sigma.toInt}mm)")
+          ui.show(modeGrp, mean,                                  s"Mode${modeIdx+1}_mean")
+          ui.show(modeGrp, model.instance(DenseVector(coeffs1pos)), s"Mode${modeIdx+1}_+1sigma")
+          ui.show(modeGrp, model.instance(DenseVector(coeffs1neg)), s"Mode${modeIdx+1}_-1sigma")
+          ui.show(modeGrp, model.instance(DenseVector(coeffs2pos)), s"Mode${modeIdx+1}_+2sigma")
+          ui.show(modeGrp, model.instance(DenseVector(coeffs2neg)), s"Mode${modeIdx+1}_-2sigma")
+        }
+        println("  EXPECT: toggle each G_ModeN group to see how each axis deforms the scapula")
+
         // ── F. Outlier specimens ────────────────────────────────────────────
         println(s"\n[F] Registration outlier check (specimen → SSM mean distance)…")
-        val mean = model.mean
         val ranked = meshes.zip(files).map { case (m, f) =>
           val d = Metrics.surfaceDistances(m, mean)
           (d.sum / d.length, m, f.getName.stripSuffix(".stl").stripPrefix("reg_"))
@@ -218,12 +244,13 @@ object ViewSSM {
     println("  HOW TO USE")
     println("=" * 72)
     println("  Eye icon       : show / hide any group")
-    println("  A_Original     : raw — should look unaligned")
-    println("  B_PassN        : toggle pass 1 vs pass 4 to see improvement")
-    println("  C_Means        : 4 overlaid means — nearly identical = converged")
+    println("  A_Original     : raw — should look unaligned (non-registered surfaces)")
+    println("  B_PassN        : toggle pass 1 vs pass 4 to see registration improvement")
+    println("  C_Means        : overlaid means — nearly identical = converged GPA")
     println("  D_DistMap      : colour map — blue=good, red=large residual error")
     println("  E_SSM          : click it → drag Mode 0 slider to explore variation")
     println("  F_Outliers     : worst specimens — re-register or exclude if > 3× avg")
+    println("  G_ModeN        : Mode N shapes at ±1σ and ±2σ — main axes of variation")
     println()
     println("  TO COMPUTE SSM VALIDATION METRICS (compactness / generalization / specificity):")
     println("    sbt \"runMain scapula.SSMValidation\"")
