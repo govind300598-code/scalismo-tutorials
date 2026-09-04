@@ -1,389 +1,266 @@
 #!/usr/bin/env python3
 """
-plot_ssm_metrics.py — Plot SSM validation metrics from CSV files exported by
-SSMValidation.scala.
+SSM validation metric plots for the scapula pipeline.
 
 Usage:
-    python3 plot_ssm_metrics.py --plots-dir /path/to/outDir/plots
+  pip install matplotlib seaborn pandas numpy
+  python3 plot_ssm_metrics.py --plots-dir "/path/to/plots"
 
-Requirements:
-    pip install matplotlib seaborn pandas numpy
+Reads:
+  compactness_pass<N>.csv
+  generalization_pass<N>.csv
+  specificity_pass<N>.csv
+  distance_to_mean_pass<N>.csv
+  pairwise_distances_pass<N>.csv
+  stability.csv
 
-Output:
-    All PNGs are written into the same --plots-dir directory.
-
-    compactness.png              — cumulative variance explained vs. mode count
-    generalization.png           — mean reconstruction error vs. mode count
-    reconstruction_heatmap.png   — per-specimen error for every mode count
-    specificity.png              — mean min-distance-to-training vs. mode count
-    pairwise_distances.png       — N×N symmetric heatmap of pairwise distances
-    pairwise_histogram.png       — histogram of all pairwise distances
-    distance_to_mean.png         — stacked bar per specimen (mean / RMS / HD95)
+Writes:  <plots-dir>/ssm_validation.png  (and shows the window)
 """
 
 import argparse
-import os
 import sys
+from pathlib import Path
 
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 
-try:
-    import seaborn as sns
-    HAS_SEABORN = True
-except ImportError:
-    HAS_SEABORN = False
-    print("seaborn not found — heatmaps will use matplotlib imshow instead.")
-
-# ── Style ────────────────────────────────────────────────────────────────────
-plt.rcParams.update({
-    "figure.dpi": 150,
-    "font.family": "sans-serif",
-    "font.size": 11,
-    "axes.titlesize": 13,
-    "axes.labelsize": 11,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 9,
-    "lines.linewidth": 1.8,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-})
-C_BLUE  = "#1f77b4"
-C_GREEN = "#2ca02c"
-C_RED   = "#d62728"
-C_GRAY  = "#7f7f7f"
-C_ORNG  = "#ff7f0e"
+# ── palette ────────────────────────────────────────────────────────────────────
+COLORS = ["#3B82F6", "#8B5CF6", "#F59E0B", "#34D399", "#F87171", "#22D3EE"]
+STYLE  = {
+    "axes.facecolor":   "#0F1929",
+    "figure.facecolor": "#070D1A",
+    "axes.edgecolor":   "#1E3050",
+    "grid.color":       "#1E3050",
+    "text.color":       "#E2EAF8",
+    "axes.labelcolor":  "#94A3B8",
+    "xtick.color":      "#6A85A8",
+    "ytick.color":      "#6A85A8",
+    "axes.grid":        True,
+    "grid.linestyle":   "--",
+    "grid.alpha":       0.4,
+    "font.family":      "monospace",
+    "axes.spines.top":  False,
+    "axes.spines.right":False,
+}
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-def load(plots_dir: str, name: str) -> pd.DataFrame:
-    path = os.path.join(plots_dir, name)
-    if not os.path.exists(path):
-        raise FileNotFoundError(path)
-    return pd.read_csv(path)
+def load_passes(plots_dir: Path, prefix: str, passes: list[int]) -> dict[int, pd.DataFrame]:
+    out = {}
+    for n in passes:
+        f = plots_dir / f"{prefix}_pass{n}.csv"
+        if f.exists():
+            out[n] = pd.read_csv(f)
+    return out
 
 
-def savefig(fig, plots_dir: str, name: str) -> None:
-    path = os.path.join(plots_dir, name)
-    fig.savefig(path, bbox_inches="tight")
-    print(f"  Saved: {path}")
-    plt.close(fig)
-
-
-def short(name: str, maxlen: int = 14) -> str:
-    return name[-maxlen:] if len(name) > maxlen else name
-
-
-# ── Plot functions ────────────────────────────────────────────────────────────
-def plot_compactness(df: pd.DataFrame, plots_dir: str) -> None:
-    """Cumulative variance explained vs. number of modes."""
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(df["mode"], df["cumulative_variance_pct"],
-            color=C_BLUE, marker="o", markersize=3, label="Cumulative variance")
-
-    for thr, col, label in [(90, C_GRAY, "90 %"), (95, C_GREEN, "95 %"), (99, C_RED, "99 %")]:
-        ax.axhline(thr, color=col, linestyle="--", linewidth=0.9, label=label)
-        hits = df[df["cumulative_variance_pct"] >= thr]
-        if not hits.empty:
-            k = int(hits["mode"].iloc[0])
-            ax.annotate(f"{k}", xy=(k, thr), xytext=(k + 0.4, thr - 5),
-                        fontsize=8, color=col, fontweight="bold")
-
-    ax.set_xlabel("Number of modes")
-    ax.set_ylabel("Cumulative variance explained")
-    ax.set_title("Compactness — Cumulative Variance Explained by PCA Modes")
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter())
-    ax.set_xlim(1, df["mode"].max())
-    ax.set_ylim(0, 102)
-    ax.legend(loc="lower right")
-    ax.grid(True, alpha=0.25)
-    savefig(fig, plots_dir, "compactness.png")
-
-
-def plot_scree(df: pd.DataFrame, plots_dir: str) -> None:
-    """Per-mode (not cumulative) variance — scree plot."""
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.bar(df["mode"], df["variance_pct"], color=C_BLUE, alpha=0.75, width=0.8)
-    ax.set_xlabel("Mode")
-    ax.set_ylabel("Variance explained per mode (%)")
-    ax.set_title("Scree Plot — Variance per PCA Mode")
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter())
-    ax.set_xlim(0.5, df["mode"].max() + 0.5)
-    ax.grid(True, alpha=0.25, axis="y")
-    savefig(fig, plots_dir, "scree.png")
-
-
-def plot_generalization(df: pd.DataFrame, plots_dir: str) -> None:
-    """Mean reconstruction error (mm) vs. number of modes."""
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(df["num_modes"], df["mean_error_mm"],
-            color=C_BLUE, marker="o", markersize=3)
-    ax.set_xlabel("Number of modes")
-    ax.set_ylabel("Mean reconstruction error (mm)")
-    ax.set_title("Generalization — Reconstruction Error vs. Mode Count")
-    ax.set_xlim(1, df["num_modes"].max())
-    ax.set_ylim(0)
-    ax.grid(True, alpha=0.25)
-    savefig(fig, plots_dir, "generalization.png")
-
-
-def plot_reconstruction_heatmap(df: pd.DataFrame, plots_dir: str) -> None:
-    """Per-specimen reconstruction error for every mode count (heatmap)."""
-    pivot = df.pivot(index="specimen_id", columns="num_modes", values="error_mm")
-    # Sort rows by error at max modes (hardest specimens at top)
-    pivot = pivot.loc[pivot.iloc[:, -1].sort_values(ascending=False).index]
-
-    fig_h = max(5, len(pivot) * 0.35)
-    fig_w = max(8, len(pivot.columns) * 0.4)
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
-
-    row_labels = [short(s) for s in pivot.index]
-    col_labels = list(pivot.columns)
-
-    if HAS_SEABORN:
-        sns.heatmap(pivot, ax=ax, cmap="YlOrRd",
-                    xticklabels=col_labels, yticklabels=row_labels,
-                    cbar_kws={"label": "Mean reconstruction error (mm)"},
-                    linewidths=0.2 if len(pivot) <= 30 else 0)
-    else:
-        im = ax.imshow(pivot.values, aspect="auto", cmap="YlOrRd")
-        ax.set_xticks(range(len(col_labels))); ax.set_xticklabels(col_labels, fontsize=7)
-        ax.set_yticks(range(len(row_labels))); ax.set_yticklabels(row_labels, fontsize=7)
-        fig.colorbar(im, ax=ax, label="Mean reconstruction error (mm)")
-
-    ax.set_xlabel("Number of modes")
-    ax.set_ylabel("Specimen")
-    ax.set_title("Per-Specimen Reconstruction Error vs. Mode Count (mm)")
-    plt.xticks(rotation=0, fontsize=8)
-    plt.yticks(rotation=0, fontsize=8)
-    savefig(fig, plots_dir, "reconstruction_heatmap.png")
-
-
-def plot_specificity(df: pd.DataFrame, plots_dir: str) -> None:
-    """Mean minimum-distance of random samples to training set."""
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(df["num_modes"], df["mean_specificity_mm"],
-            color=C_RED, marker="o", markersize=3, label="Mean")
-    if "std_specificity_mm" in df.columns:
-        lo = df["mean_specificity_mm"] - df["std_specificity_mm"]
-        hi = df["mean_specificity_mm"] + df["std_specificity_mm"]
-        ax.fill_between(df["num_modes"], lo.clip(lower=0), hi,
-                        alpha=0.2, color=C_RED, label="± 1 SD")
-    ax.set_xlabel("Number of modes")
-    ax.set_ylabel("Min distance to nearest training shape (mm)")
-    ax.set_title("Specificity — Distance of Random Samples to Training Set")
-    ax.set_xlim(1, df["num_modes"].max())
-    ax.set_ylim(0)
-    ax.legend()
-    ax.grid(True, alpha=0.25)
-    savefig(fig, plots_dir, "specificity.png")
-
-
-def plot_pairwise_heatmap(df: pd.DataFrame, plots_dir: str) -> None:
-    """NxN symmetric matrix of pairwise distances."""
-    specs = sorted(set(df["specimen_i"].tolist() + df["specimen_j"].tolist()))
-    n     = len(specs)
-    idx   = {s: i for i, s in enumerate(specs)}
-    mat   = np.zeros((n, n))
-    for _, row in df.iterrows():
-        i, j = idx[row["specimen_i"]], idx[row["specimen_j"]]
-        mat[i, j] = row["mean_mm"]
-        mat[j, i] = row["mean_mm"]
-
-    labels   = [short(s) for s in specs]
-    cell_px  = 0.5
-    fig_size = max(6, n * cell_px)
-    fig, ax  = plt.subplots(figsize=(fig_size, fig_size))
-
-    annotate = n <= 16
-    if HAS_SEABORN:
-        sns.heatmap(mat, ax=ax, xticklabels=labels, yticklabels=labels,
-                    cmap="viridis", annot=annotate, fmt=".1f",
-                    linewidths=0.3 if n <= 24 else 0,
-                    cbar_kws={"label": "Mean point-to-point distance (mm)"})
-    else:
-        im = ax.imshow(mat, cmap="viridis")
-        ax.set_xticks(range(n)); ax.set_xticklabels(labels, fontsize=7)
-        ax.set_yticks(range(n)); ax.set_yticklabels(labels, fontsize=7)
-        fig.colorbar(im, ax=ax, label="Mean point-to-point distance (mm)")
-
-    ax.set_title(f"Pairwise Shape Distances — {n}x{n} matrix (mm)")
-    plt.xticks(rotation=60, ha="right", fontsize=7)
-    plt.yticks(rotation=0, fontsize=7)
-    savefig(fig, plots_dir, "pairwise_distances.png")
-
-
-def plot_pairwise_histogram(df: pd.DataFrame, plots_dir: str) -> None:
-    """Distribution of all N*(N-1)/2 pairwise distances."""
-    vals = df["mean_mm"]
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-
-    # Histogram
-    axes[0].hist(vals, bins=min(25, len(vals) // 2 + 1),
-                 color=C_BLUE, edgecolor="white", alpha=0.85)
-    axes[0].axvline(vals.mean(), color=C_RED, linestyle="--",
-                    label=f"Mean = {vals.mean():.2f} mm")
-    axes[0].axvline(vals.median(), color=C_ORNG, linestyle=":",
-                    label=f"Median = {vals.median():.2f} mm")
-    axes[0].set_xlabel("Mean pairwise distance (mm)")
-    axes[0].set_ylabel("Count")
-    axes[0].set_title("Distribution of Pairwise Distances")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.25, axis="y")
-
-    # Box plot of all three metrics if available
-    metrics = [c for c in ["mean_mm", "rms_mm", "hd95_mm"] if c in df.columns]
-    axes[1].boxplot([df[m] for m in metrics], labels=[m.replace("_mm", "") for m in metrics],
-                    patch_artist=True,
-                    boxprops=dict(facecolor=C_BLUE, alpha=0.6),
-                    medianprops=dict(color="black"))
-    axes[1].set_ylabel("Distance (mm)")
-    axes[1].set_title("Pairwise Distance Metrics Summary")
-    axes[1].grid(True, alpha=0.25, axis="y")
-
-    fig.tight_layout()
-    savefig(fig, plots_dir, "pairwise_histogram.png")
-
-
-def plot_distance_to_mean(df: pd.DataFrame, plots_dir: str) -> None:
-    """Stacked bar: mean / (RMS-mean) / (HD95-RMS) per specimen."""
-    df = df.sort_values("mean_mm", ascending=False).reset_index(drop=True)
-    x  = np.arange(len(df))
-    short_ids = [short(s, 16) for s in df["specimen_id"]]
-
-    fig_w = max(9, len(df) * 0.5)
-    fig, ax = plt.subplots(figsize=(fig_w, 5))
-
-    ax.bar(x, df["mean_mm"],
-           color=C_BLUE, alpha=0.85, label="Mean dist.")
-    ax.bar(x, (df["rms_mm"] - df["mean_mm"]).clip(lower=0),
-           bottom=df["mean_mm"],
-           color=C_GREEN, alpha=0.70, label="RMS – Mean")
-    ax.bar(x, (df["hd95_mm"] - df["rms_mm"]).clip(lower=0),
-           bottom=df["rms_mm"],
-           color=C_RED, alpha=0.60, label="HD95 – RMS")
-
-    # Overall mean line
-    grand_mean = df["mean_mm"].mean()
-    ax.axhline(grand_mean, color="black", linestyle="--", linewidth=0.9,
-               label=f"Dataset mean = {grand_mean:.2f} mm")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(short_ids, rotation=55, ha="right", fontsize=7)
-    ax.set_ylabel("Distance to SSM mean shape (mm)")
-    ax.set_title("Per-Specimen Distance to Mean Shape (sorted by mean)")
-    ax.legend(loc="upper right")
-    ax.grid(True, alpha=0.25, axis="y")
-    savefig(fig, plots_dir, "distance_to_mean.png")
-
-
-def plot_all_validation(comp_df, gen_df, spec_df, plots_dir: str) -> None:
-    """Three-panel summary: compactness / generalization / specificity."""
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
-
-    # Panel 1 — Compactness
-    ax = axes[0]
-    ax.plot(comp_df["mode"], comp_df["cumulative_variance_pct"], color=C_BLUE, marker="o", markersize=2)
-    for thr, col in [(90, C_GRAY), (95, C_GREEN), (99, C_RED)]:
-        ax.axhline(thr, color=col, linestyle="--", linewidth=0.8)
-    ax.set_xlabel("Modes"); ax.set_ylabel("Cumulative variance (%)")
-    ax.set_title("Compactness")
-    ax.yaxis.set_major_formatter(mticker.PercentFormatter())
-    ax.set_ylim(0, 102); ax.set_xlim(1, comp_df["mode"].max())
-    ax.grid(True, alpha=0.2)
-
-    # Panel 2 — Generalization
-    ax = axes[1]
-    ax.plot(gen_df["num_modes"], gen_df["mean_error_mm"], color=C_BLUE, marker="o", markersize=2)
-    ax.set_xlabel("Modes"); ax.set_ylabel("Mean error (mm)")
-    ax.set_title("Generalization")
-    ax.set_xlim(1, gen_df["num_modes"].max()); ax.set_ylim(0)
-    ax.grid(True, alpha=0.2)
-
-    # Panel 3 — Specificity
-    ax = axes[2]
-    ax.plot(spec_df["num_modes"], spec_df["mean_specificity_mm"], color=C_RED, marker="o", markersize=2)
-    if "std_specificity_mm" in spec_df.columns:
-        lo = (spec_df["mean_specificity_mm"] - spec_df["std_specificity_mm"]).clip(lower=0)
-        hi = spec_df["mean_specificity_mm"] + spec_df["std_specificity_mm"]
-        ax.fill_between(spec_df["num_modes"], lo, hi, alpha=0.2, color=C_RED)
-    ax.set_xlabel("Modes"); ax.set_ylabel("Min dist. to training (mm)")
-    ax.set_title("Specificity")
-    ax.set_xlim(1, spec_df["num_modes"].max()); ax.set_ylim(0)
-    ax.grid(True, alpha=0.2)
-
-    fig.suptitle("SSM Validation Summary", fontsize=14, fontweight="bold")
-    fig.tight_layout()
-    savefig(fig, plots_dir, "ssm_validation_summary.png")
-
-
-# ── Main ─────────────────────────────────────────────────────────────────────
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Plot SSM validation metrics exported by SSMValidation.scala"
-    )
-    parser.add_argument("--plots-dir", required=True,
-                        help="Directory containing the CSV files from SSMValidation")
-    args = parser.parse_args()
-    plots_dir = args.plots_dir
-
-    if not os.path.isdir(plots_dir):
-        print(f"ERROR: directory not found: {plots_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Reading CSVs from: {plots_dir}\n")
-
-    results = {}
-    tasks = [
-        ("compactness.csv",             "compactness",    True),
-        ("generalization.csv",          "generalization", True),
-        ("reconstruction_error_matrix.csv", "recon",     True),
-        ("specificity.csv",             "specificity",    True),
-        ("pairwise_distances.csv",      "pairwise",       True),
-        ("distance_to_mean.csv",        "dtm",            True),
-    ]
-
-    for fname, key, required in tasks:
+def find_passes(plots_dir: Path) -> list[int]:
+    ns = []
+    for f in sorted(plots_dir.glob("compactness_pass*.csv")):
         try:
-            results[key] = load(plots_dir, fname)
-            print(f"Loaded {fname:50s}  ({len(results[key])} rows)")
-        except FileNotFoundError:
-            if required:
-                print(f"  MISSING: {fname}  — skipping dependent plots")
-            results[key] = None
+            ns.append(int(f.stem.split("_pass")[1]))
+        except ValueError:
+            pass
+    return sorted(ns)
 
-    print()
 
-    if results.get("compactness") is not None:
-        print("Plotting compactness..."); plot_compactness(results["compactness"], plots_dir)
-        print("Plotting scree...");       plot_scree(results["compactness"], plots_dir)
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--plots-dir", required=True)
+    ap.add_argument("--out", default=None, help="output PNG path (default: <plots-dir>/ssm_validation.png)")
+    args = ap.parse_args()
 
-    if results.get("generalization") is not None:
-        print("Plotting generalization..."); plot_generalization(results["generalization"], plots_dir)
+    plots_dir = Path(args.plots_dir)
+    if not plots_dir.is_dir():
+        sys.exit(f"ERROR: {plots_dir} is not a directory")
 
-    if results.get("recon") is not None:
-        print("Plotting reconstruction heatmap..."); plot_reconstruction_heatmap(results["recon"], plots_dir)
+    passes = find_passes(plots_dir)
+    if not passes:
+        sys.exit(f"ERROR: no compactness_pass*.csv files found in {plots_dir}")
+    print(f"Found passes: {passes}")
 
-    if results.get("specificity") is not None:
-        print("Plotting specificity..."); plot_specificity(results["specificity"], plots_dir)
+    out_path = Path(args.out) if args.out else plots_dir / "ssm_validation.png"
 
-    if results.get("pairwise") is not None:
-        print("Plotting pairwise heatmap..."); plot_pairwise_heatmap(results["pairwise"], plots_dir)
-        print("Plotting pairwise histogram..."); plot_pairwise_histogram(results["pairwise"], plots_dir)
+    # ── load data ──────────────────────────────────────────────────────────────
+    compact  = load_passes(plots_dir, "compactness",         passes)
+    gen      = load_passes(plots_dir, "generalization",      passes)
+    spec     = load_passes(plots_dir, "specificity",         passes)
+    dtm      = load_passes(plots_dir, "distance_to_mean",    passes)
+    stab_f   = plots_dir / "stability.csv"
+    stab     = pd.read_csv(stab_f) if stab_f.exists() else None
 
-    if results.get("dtm") is not None:
-        print("Plotting distance to mean..."); plot_distance_to_mean(results["dtm"], plots_dir)
+    matplotlib.rcParams.update(STYLE)
+    nP = len(passes)
 
-    # Three-panel summary (needs all three validation metrics)
-    if all(results.get(k) is not None for k in ("compactness", "generalization", "specificity")):
-        print("Plotting combined validation summary...")
-        plot_all_validation(results["compactness"], results["generalization"],
-                            results["specificity"], plots_dir)
+    # ── layout ─────────────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(14, 11))
+    fig.suptitle("Scapula SSM — Validation Metrics", fontsize=14,
+                 color="#F1F7FF", fontweight="bold", y=0.98)
 
-    print(f"\nDone. PNGs written to: {plots_dir}")
+    gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.46, wspace=0.38,
+                           left=0.07, right=0.97, top=0.93, bottom=0.07)
+
+    ax_comp = fig.add_subplot(gs[0, 0])
+    ax_gen  = fig.add_subplot(gs[0, 1])
+    ax_spec = fig.add_subplot(gs[0, 2])
+    ax_dtm  = fig.add_subplot(gs[1, 0:2])
+    ax_pair = fig.add_subplot(gs[1, 2])
+    ax_stab = fig.add_subplot(gs[2, 0])
+    ax_cum  = fig.add_subplot(gs[2, 1])
+    ax_info = fig.add_subplot(gs[2, 2])
+
+    # ── 1. Compactness ─────────────────────────────────────────────────────────
+    for n, df in compact.items():
+        c = COLORS[passes.index(n)]
+        ax_comp.plot(df["mode"], df["cumulative_variance_pct"],
+                     color=c, lw=2, label=f"SSM{n}")
+    ax_comp.axhline(90, color="#6A85A8", lw=0.8, ls=":")
+    ax_comp.axhline(95, color="#6A85A8", lw=0.8, ls=":")
+    ax_comp.axhline(99, color="#6A85A8", lw=0.8, ls=":")
+    ax_comp.set_xlabel("# modes")
+    ax_comp.set_ylabel("cumulative variance %")
+    ax_comp.set_title("Compactness", color="#F1F7FF")
+    ax_comp.legend(fontsize=8)
+    ax_comp.set_ylim(0, 101)
+
+    # ── 2. Generalization ──────────────────────────────────────────────────────
+    for n, df in gen.items():
+        c = COLORS[passes.index(n)]
+        ax_gen.plot(df["num_modes"], df["mean_error_mm"],
+                    color=c, lw=2, label=f"SSM{n}")
+    ax_gen.set_xlabel("# modes")
+    ax_gen.set_ylabel("mean error (mm)")
+    ax_gen.set_title("Generalization", color="#F1F7FF")
+    ax_gen.legend(fontsize=8)
+
+    # ── 3. Specificity ─────────────────────────────────────────────────────────
+    for n, df in spec.items():
+        c = COLORS[passes.index(n)]
+        ax_spec.plot(df["num_modes"], df["mean_specificity_mm"],
+                     color=c, lw=2, label=f"SSM{n}")
+        ax_spec.fill_between(
+            df["num_modes"],
+            df["mean_specificity_mm"] - df["std_specificity_mm"],
+            df["mean_specificity_mm"] + df["std_specificity_mm"],
+            alpha=0.15, color=c)
+    ax_spec.set_xlabel("# modes")
+    ax_spec.set_ylabel("min dist to training (mm)")
+    ax_spec.set_title("Specificity", color="#F1F7FF")
+    ax_spec.legend(fontsize=8)
+
+    # ── 4. Distance to mean (box plot per SSM) ─────────────────────────────────
+    box_data, box_labels, box_colors = [], [], []
+    for n, df in dtm.items():
+        box_data.append(df["mean_mm"].values)
+        box_labels.append(f"SSM{n}")
+        box_colors.append(COLORS[passes.index(n)])
+
+    bp = ax_dtm.boxplot(box_data, patch_artist=True, widths=0.4,
+                        medianprops=dict(color="#F1F7FF", lw=2))
+    for patch, col in zip(bp["boxes"], box_colors):
+        patch.set_facecolor(col); patch.set_alpha(0.4)
+    for element in ["whiskers","caps","fliers"]:
+        for item in bp[element]:
+            item.set_color("#6A85A8")
+    ax_dtm.set_xticklabels(box_labels)
+    ax_dtm.set_ylabel("mean surface dist to SSM mean (mm)")
+    ax_dtm.set_title("Distance to Mean Shape", color="#F1F7FF")
+
+    # ── 5. Pairwise distances (heatmap of mean column) ─────────────────────────
+    pw_files = list(plots_dir.glob("pairwise_distances_pass*.csv"))
+    if pw_files:
+        # show mean pairwise distance per specimen from last pass
+        last_n = max(passes)
+        pw_f = plots_dir / f"pairwise_distances_pass{last_n}.csv"
+        if pw_f.exists():
+            pw = pd.read_csv(pw_f)
+            # aggregate: average mean_mm per specimen_i
+            per_spec = pw.groupby("specimen_i")["mean_mm"].mean().sort_values()
+            ax_pair.barh(range(len(per_spec)), per_spec.values,
+                         color=COLORS[passes.index(last_n)], alpha=0.7)
+            ax_pair.set_yticks(range(len(per_spec)))
+            ax_pair.set_yticklabels(
+                [s[-8:] for s in per_spec.index], fontsize=7)
+            ax_pair.set_xlabel("avg pairwise dist (mm)")
+            ax_pair.set_title(f"Pairwise Dist (SSM{last_n})", color="#F1F7FF")
+    else:
+        ax_pair.set_visible(False)
+
+    # ── 6. Stability (consecutive mean shift) ──────────────────────────────────
+    if stab is not None and len(stab) > 0:
+        labels = [f"SSM{int(r.pass_from)}→{int(r.pass_to)}" for _, r in stab.iterrows()]
+        vals   = stab["mean_mm"].values
+        bars = ax_stab.bar(labels, vals,
+                           color=[COLORS[i] for i in range(len(vals))], alpha=0.8)
+        ax_stab.axhline(1.0, color="#F87171", lw=1, ls="--", label="1 mm threshold")
+        for bar, v in zip(bars, vals):
+            ax_stab.text(bar.get_x() + bar.get_width()/2, v + 0.02,
+                         f"{v:.3f}", ha="center", va="bottom", fontsize=8,
+                         color="#F1F7FF")
+        ax_stab.set_ylabel("mean surface dist (mm)")
+        ax_stab.set_title("Mean-Shape Stability", color="#F1F7FF")
+        ax_stab.legend(fontsize=8)
+    else:
+        ax_stab.set_visible(False)
+
+    # ── 7. Cumulative variance comparison table ─────────────────────────────────
+    pct_targets = [90, 95, 99]
+    x = np.arange(len(pct_targets))
+    w = 0.8 / max(nP, 1)
+    for ki, (n, df) in enumerate(compact.items()):
+        cv = df["cumulative_variance_pct"].values
+        modes_at = []
+        for pct in pct_targets:
+            idx = np.searchsorted(cv, pct)
+            modes_at.append(int(df["mode"].iloc[min(idx, len(df)-1)]))
+        offset = (ki - (nP-1)/2) * w
+        bars2 = ax_cum.bar(x + offset, modes_at, width=w*0.85,
+                           color=COLORS[ki], alpha=0.8, label=f"SSM{n}")
+        for bar, v in zip(bars2, modes_at):
+            ax_cum.text(bar.get_x() + bar.get_width()/2, v + 0.1,
+                        str(v), ha="center", va="bottom", fontsize=8,
+                        color="#F1F7FF")
+    ax_cum.set_xticks(x)
+    ax_cum.set_xticklabels([f"{p}% var" for p in pct_targets])
+    ax_cum.set_ylabel("# modes required")
+    ax_cum.set_title("Modes for Variance Explained", color="#F1F7FF")
+    ax_cum.legend(fontsize=8)
+
+    # ── 8. Summary text panel ──────────────────────────────────────────────────
+    ax_info.axis("off")
+    lines = ["SSM SUMMARY\n"]
+    for n, df in compact.items():
+        cv = df["cumulative_variance_pct"].values
+        modes_list = df["mode"].values
+        def m_at(pct):
+            idx = np.searchsorted(cv, pct)
+            return int(modes_list[min(idx, len(df)-1)])
+        lines.append(f"SSM{n}  rank={len(df)}")
+        lines.append(f"  90%: {m_at(90)} modes")
+        lines.append(f"  95%: {m_at(95)} modes")
+        lines.append(f"  99%: {m_at(99)} modes")
+        if n in dtm:
+            avg = dtm[n]["mean_mm"].mean()
+            lines.append(f"  avg dist-to-mean: {avg:.3f} mm")
+        lines.append("")
+    if stab is not None and len(stab) > 0:
+        lines.append("CONVERGENCE")
+        for _, r in stab.iterrows():
+            tag = "✓" if r.mean_mm < 1.0 else "!"
+            lines.append(f"  {tag} SSM{int(r.pass_from)}→{int(r.pass_to)}: {r.mean_mm:.3f} mm")
+
+    ax_info.text(0.05, 0.95, "\n".join(lines), transform=ax_info.transAxes,
+                 va="top", ha="left", fontsize=8.5,
+                 color="#E2EAF8", fontfamily="monospace",
+                 bbox=dict(boxstyle="round,pad=0.5", facecolor="#0F1929",
+                           edgecolor="#1E3050", alpha=0.9))
+
+    # ── save ───────────────────────────────────────────────────────────────────
+    fig.savefig(out_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    print(f"\nSaved: {out_path}")
+    plt.show()
 
 
 if __name__ == "__main__":
