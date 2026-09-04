@@ -1,6 +1,6 @@
 package scapula
 
-import scalismo.common.{Field, PointId}
+import scalismo.common.{Domain, Field, PointId}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.io.MeshIO
@@ -53,9 +53,11 @@ object RebuildSSM {
     reference: TriangleMesh[_3D]
   )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
 
-    // EuclideanSpace3D is the concrete singleton for the 3D real domain
+    // Whole-space domain (defined everywhere); avoids depending on any
+    // specific scalismo object name for the Euclidean space.
+    val wholeDomain = new Domain[_3D] { def isDefinedAt(pt: Point[_3D]) = true }
     val zeroMean = Field[_3D, EuclideanVector[_3D]](
-      EuclideanSpace3D, _ => EuclideanVector.zeros[_3D])
+      wholeDomain, _ => EuclideanVector.zeros[_3D])
 
     val scalarKernel = GaussianKernel[_3D](Config.kernelSigma) * Config.kernelScale
     val kernel       = DiagonalKernel(scalarKernel, outputDim = 3)
