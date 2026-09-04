@@ -1,7 +1,7 @@
 package scapula
 
 import scalismo.geometry._3D
-import scalismo.mesh.TriangleMesh
+import scalismo.mesh.{ScalarMeshField, TriangleMesh}
 import scalismo.statisticalmodel.PointDistributionModel
 import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.ui.api.ScalismoUI
@@ -10,32 +10,33 @@ import scalismo.utils.Random
 import java.io.File
 
 /**
- * Comprehensive visual inspection for the scapula SSM pipeline.
+ * Full visual inspection for the scapula SSM pipeline.
  *
- * Groups (click the eye icon in the Scene panel to show/hide each):
+ * Scene groups (eye icon to show/hide):
  *
- *   A_Original              Raw, non-registered scapulae (first 8).
- *                           R ones mirrored to L frame.
- *                           These should look spread/unaligned — that is correct.
+ *   A_Original              8 raw scapulae BEFORE registration (R mirrored to L).
+ *                           Should look spread/unaligned — that is correct.
  *
- *   B_PassN_Registered      Non-rigidly registered meshes from pass N (first 8).
- *                           All shapes should tightly overlap.
- *                           Compare pass 1 vs pass 4 to see registration improvement.
+ *   B_PassN_Registered      Up to 8 non-rigidly registered shapes from pass N.
+ *                           All should tightly overlap → good correspondence.
+ *                           Toggle pass 1 vs pass 4 to see improvement.
  *
- *   C_Means                 Mean shapes from every pass overlaid.
- *                           They should converge (< 1 mm shift between passes).
+ *   C_Means                 All pass means overlaid. Should nearly coincide.
+ *                           Console prints the mm distance between consecutive means.
  *
- *   D_SSM_Interactive       Interactive SSM from the last available pass.
- *                           Click it → drag "Mode 0" slider on the right panel
- *                           to explore the main axis of shape variation.
+ *   D_DistMap_PassN_<id>    Colour-coded surface distance: registered mesh → mean.
+ *                           Blue = well-registered, Red = large residual.
+ *                           First 4 specimens shown per pass.
  *
- *   E_Outlier_specimens     The 3 worst-fitting specimens (highest mean surface
- *                           distance to SSM mean) shown alongside the mean.
- *                           Use these to spot failed registrations.
+ *   E_SSM_Interactive       Interactive SSM (pass 4 / last available).
+ *                           Click it → drag Mode sliders in right panel.
+ *                           Mode 0 = main axis of shape variation.
+ *
+ *   F_Outliers              3 worst-fitting specimens shown alongside SSM mean.
  *
  * Usage:
  *   sbt "runMain scapula.ViewSSM"
- *   SCAPULA_OUT_DIR=/your/path sbt "runMain scapula.ViewSSM [/output/dir]"
+ *   SCAPULA_OUT_DIR=/your/path sbt "runMain scapula.ViewSSM"
  */
 object ViewSSM {
 
@@ -45,6 +46,19 @@ object ViewSSM {
       .filter(f => f.getName.endsWith(".stl") && f.getName.startsWith("reg_"))
       .sortBy(_.getName).toIndexedSeq
 
+  /** Surface-distance colour map: reg mesh → target, shown as ScalarMeshField. */
+  private def showDistMap(
+    ui: ScalismoUI,
+    group: scalismo.ui.api.Group,
+    regMesh: TriangleMesh[_3D],
+    target:  TriangleMesh[_3D],
+    name: String
+  ): Unit = {
+    val dists = Metrics.surfaceDistances(regMesh, target).map(_.toFloat)
+    val field = ScalarMeshField(regMesh, dists)
+    ui.show(group, field, name)
+  }
+
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
@@ -52,142 +66,168 @@ object ViewSSM {
     val dataDir = Config.dataDir
     val baseDir = if (args.nonEmpty) new File(args(0)) else Config.outDir
 
-    println("\n" + "=" * 70)
-    println("  Scapula SSM — Visual Inspection")
-    println("=" * 70)
+    println("\n" + "=" * 72)
+    println("  Scapula SSM — Full Visual Inspection")
+    println("=" * 72)
 
     val ui = ScalismoUI("Scapula SSM — Visual Inspection")
 
-    // ── A. Original (non-registered) scapulae ─────────────────────────────
+    // ── A. Original (non-registered) scapulae ──────────────────────────────
     println("\n[A] Original (non-registered) scapulae")
     val specimens = ScapulaData.specimens(dataDir)
-    val origGroup = ui.createGroup("A_Original (raw, before registration)")
+    val origGrp   = ui.createGroup("A_Original (raw, before registration)")
     specimens.take(8).foreach { spec =>
       val raw  = ScapulaData.loadMesh(spec.file)
       val mesh = if (spec.isRight) ScapulaData.mirrorMesh(raw) else raw
-      ui.show(origGroup, mesh, spec.modelId + (if (spec.isRight) "_mirrored" else ""))
+      ui.show(origGrp, mesh, spec.modelId + (if (spec.isRight) "_mirrored" else ""))
     }
-    println(s"  ${math.min(8, specimens.length)} specimens loaded (R ones mirrored to L frame)")
-    println("  EXPECT: shapes spread across space — registration will align these")
+    println(s"  ${math.min(8, specimens.length)} meshes loaded. R ones mirrored to L frame.")
+    println("  EXPECT: shapes spread in space — unaligned is correct here.")
 
-    // ── B. Registered meshes per pass ─────────────────────────────────────
+    // ── B. Registered meshes per pass ──────────────────────────────────────
     val passDirs = (1 to 4).map(n => n -> new File(baseDir, s"pass$n"))
       .filter(_._2.isDirectory)
 
     passDirs.foreach { case (n, passDir) =>
-      val allReg = regFilesIn(passDir)
-      if (allReg.nonEmpty) {
-        println(s"\n[B] Pass $n registered meshes (${allReg.length} total, showing first 8)")
+      val files = regFilesIn(passDir)
+      if (files.nonEmpty) {
+        println(s"\n[B] Pass $n registered meshes (${files.length} total, showing first 8)")
         val grp = ui.createGroup(s"B_Pass${n}_Registered")
-        allReg.take(8).foreach { f =>
+        files.take(8).foreach { f =>
           ui.show(grp, ScapulaData.loadMesh(f),
             f.getName.stripSuffix(".stl").stripPrefix("reg_"))
         }
-        println("  EXPECT: tight overlap of all shapes → good dense correspondence")
+        println(s"  EXPECT: all shapes overlap tightly → good dense correspondence.")
       }
     }
 
-    // ── C. Mean shapes (convergence check) ────────────────────────────────
-    println("\n[C] Mean shapes from each pass (convergence check)")
-    val meansGroup = ui.createGroup("C_Means (should converge < 1 mm)")
+    // ── C. Mean shapes (convergence) ───────────────────────────────────────
+    println("\n[C] Population means — convergence check")
+    val meansGrp   = ui.createGroup("C_Means (convergence — should < 1 mm shift)")
     val loadedMeans = scala.collection.mutable.ArrayBuffer.empty[(Int, TriangleMesh[_3D])]
     (1 to 4).foreach { n =>
       val f = new File(baseDir, s"mean_pass$n.stl")
       if (f.exists()) {
         val m = ScapulaData.loadMesh(f)
-        ui.show(meansGroup, m, s"mean_pass$n")
+        ui.show(meansGrp, m, s"mean_pass$n")
         loadedMeans += (n -> m)
         println(s"  mean_pass$n: ${m.pointSet.numberOfPoints} vertices")
       }
     }
     if (loadedMeans.length >= 2) {
-      println("  Consecutive mean distances:")
+      println("  Consecutive mean distances (CONVERGENCE TABLE):")
+      println(f"  ${"Comparison"}%-20s  ${"Mean"}%6s  ${"RMS"}%6s  ${"HD95"}%6s  ${"Status"}")
+      println("  " + "-" * 55)
       loadedMeans.sliding(2).foreach { w =>
         val (n1, m1) = w(0); val (n2, m2) = w(1)
         val st = Metrics.symmetric(m1, m2)
-        val ok = if (st.mean < 1.0) " ✓" else " !"
-        println(f"    pass$n1→pass$n2 : mean=${st.mean}%.3f  rms=${st.rms}%.3f  HD95=${st.hd95}%.3f  mm$ok")
+        val ok = if (st.mean < 1.0) "✓ converged" else "! not converged"
+        println(f"  pass$n1 → pass$n2             ${st.mean}%6.3f  ${st.rms}%6.3f  ${st.hd95}%6.3f  $ok")
       }
-      println("  EXPECT: mean shift < 1 mm = reference bias removed")
     }
 
-    // ── D. Interactive SSM from the last available pass ───────────────────
+    // ── D. Colour-coded surface distance maps ──────────────────────────────
+    // Build mean from last pass for reference
     passDirs.lastOption.foreach { case (n, passDir) =>
-      val allReg = regFilesIn(passDir)
-      if (allReg.nonEmpty) {
-        println(s"\n[D] Building interactive SSM from pass $n (${allReg.length} meshes)…")
+      val files = regFilesIn(passDir)
+      if (files.nonEmpty) {
+        // Use the saved mean if available, else compute from meshes
+        val meanMeshOpt: Option[TriangleMesh[_3D]] =
+          loadedMeans.lastOption.map(_._2)
+            .orElse {
+              println(s"  Computing mean for colour maps from pass $n…")
+              val meshes = files.map(ScapulaData.loadMesh)
+              val dc     = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
+              Some(PointDistributionModel.createUsingPCA(dc).mean)
+            }
 
-        val meshes = allReg.map(ScapulaData.loadMesh)
-        val nPts   = meshes.head.pointSet.numberOfPoints
-        val target = Config.modelResolution
+        meanMeshOpt.foreach { mean =>
+          println(s"\n[D] Surface distance colour maps: pass $n → mean")
+          println("    Blue = small residual  |  Red = large residual")
+          val distGrp = ui.createGroup(s"D_DistMap_Pass${n} (blue=good red=bad)")
+          ui.show(distGrp, mean, s"REFERENCE_mean_pass$n")
 
-        val workMeshes =
-          if (nPts > target) {
-            println(s"  Decimating $nPts → ~$target vertices…")
-            val dec = ScapulaData.decimateInCorrespondence(meshes.head, meshes, target)
-            println(s"  Actual: ${dec.head.pointSet.numberOfPoints} vertices")
-            dec
-          } else {
-            println(s"  $nPts vertices ≤ $target — no decimation needed")
-            meshes
+          files.take(4).foreach { f =>
+            val reg  = ScapulaData.loadMesh(f)
+            val name = f.getName.stripSuffix(".stl").stripPrefix("reg_")
+            val d    = Metrics.surfaceDistances(reg, mean)
+            val avg  = d.sum / d.length
+            println(f"    $name : avg=${avg}%.3f mm")
+            showDistMap(ui, distGrp, reg, mean, s"${name}_dist")
           }
+        }
+      }
+    }
 
-        println("  Running PCA…")
+    // ── E. Interactive SSM (no decimation — full resolution) ───────────────
+    passDirs.lastOption.foreach { case (n, passDir) =>
+      val files = regFilesIn(passDir)
+      if (files.nonEmpty) {
+        println(s"\n[E] Building interactive SSM from pass $n (${files.length} meshes, FULL res)…")
+        val meshes = files.map(ScapulaData.loadMesh)
+        val nPts   = meshes.head.pointSet.numberOfPoints
+        println(s"  $nPts vertices per mesh — skipping decimation for best quality")
+
         val t0    = System.currentTimeMillis()
-        val dc    = DataCollection.fromTriangleMesh3DSequence(workMeshes.head, workMeshes)
+        val dc    = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
         val model = PointDistributionModel.createUsingPCA(dc)
         val evs   = model.gp.klBasis.map(_.eigenvalue).toArray
         val total = evs.sum
-        val cumVar = evs.scanLeft(0.0)(_ + _).tail.map(_ / total * 100.0)
-        def modesFor(p: Double) = { val i = cumVar.indexWhere(_ >= p); if (i < 0) model.rank else i + 1 }
+        val cumV  = evs.scanLeft(0.0)(_ + _).tail.map(_ / total * 100.0)
+        def mFor(p: Double) = { val i = cumV.indexWhere(_ >= p); if (i < 0) model.rank else i + 1 }
 
-        println(f"  Done in ${(System.currentTimeMillis()-t0)/1000.0}%.1f s  rank=${model.rank}")
-        println(f"  90%% variance: ${modesFor(90)} modes  |  95%%: ${modesFor(95)}  |  99%%: ${modesFor(99)}")
-        println("  Top modes:")
-        evs.take(5).zipWithIndex.foreach { case (ev, i) =>
-          println(f"    Mode ${i+1}: ${ev/total*100}%.1f%%  (σ=${math.sqrt(ev)}%.2f mm)")
+        println(f"  Done in ${(System.currentTimeMillis()-t0)/1000.0}%.1f s")
+        println(f"  rank=${model.rank}  |  90%%: ${mFor(90)} modes  |  95%%: ${mFor(95)}  |  99%%: ${mFor(99)}")
+        println("\n  SSM MODE VARIANCE TABLE (SSM1=pass1, final=last pass):")
+        println(f"  ${"Mode"}%5s  ${"Variance %"}%10s  ${"Cumul %"}%10s  ${"σ (mm)"}%8s")
+        println("  " + "-" * 40)
+        evs.take(10).zipWithIndex.foreach { case (ev, i) =>
+          println(f"  ${i+1}%5d  ${ev/total*100}%10.2f  ${cumV(i)}%10.2f  ${math.sqrt(ev)}%8.3f")
         }
 
-        val ssmGroup = ui.createGroup(s"D_SSM_Interactive (pass $n)")
-        ui.show(ssmGroup, model, s"SSM_pass$n")
-        println(s"  → Click 'D_SSM_Interactive' in Scene panel, then drag Mode sliders on right")
+        val ssmGrp = ui.createGroup(s"E_SSM_Interactive (pass $n — drag Mode sliders!)")
+        ui.show(ssmGrp, model, s"SSM_pass$n")
+        println(s"\n  → Click 'E_SSM_Interactive' → drag Mode 0 slider on right panel")
+        println(s"     Mode 0 accounts for ${evs(0)/total*100.0f}%.1f%% of shape variance")
 
-        // ── E. Outlier specimens ───────────────────────────────────────────
-        println(s"\n[E] Registration quality check (distance to SSM mean)…")
-        val meanMesh = model.mean
-        val specDists = workMeshes.zip(allReg).map { case (m, f) =>
-          val d = Metrics.surfaceDistances(m, meanMesh)
+        // ── F. Outlier specimens ────────────────────────────────────────────
+        println(s"\n[F] Registration outlier check (specimen → SSM mean distance)…")
+        val mean = model.mean
+        val ranked = meshes.zip(files).map { case (m, f) =>
+          val d = Metrics.surfaceDistances(m, mean)
           (d.sum / d.length, m, f.getName.stripSuffix(".stl").stripPrefix("reg_"))
         }.sortBy(-_._1)
 
-        val outlierGroup = ui.createGroup("E_Outlier_specimens (worst fit to mean)")
-        ui.show(outlierGroup, meanMesh, "SSM_mean")
-
-        println("  Worst 3 (flag for manual inspection):")
-        specDists.take(3).foreach { case (dist, m, name) =>
-          println(f"    [!] $name : $dist%.3f mm to mean")
-          ui.show(outlierGroup, m, f"OUTLIER_${name}_${dist}%.2fmm")
+        val all = ranked.map(_._1)
+        println(f"  Population: mean=${all.sum/all.length}%.3f  max=${all.max}%.3f  min=${all.min}%.3f  mm")
+        println(f"\n  Worst 3 (INVESTIGATE THESE):")
+        val outlGrp = ui.createGroup("F_Outliers (worst fit to SSM mean)")
+        ui.show(outlGrp, mean, "SSM_mean")
+        ranked.take(3).foreach { case (d, m, name) =>
+          println(f"    [!]  $name%-40s  $d%.3f mm")
+          ui.show(outlGrp, m, f"OUTLIER_${d}%.2fmm_$name")
         }
-        println("  Best 3:")
-        specDists.takeRight(3).reverse.foreach { case (dist, _, name) =>
-          println(f"    [✓] $name : $dist%.3f mm to mean")
+        println(f"\n  Best 3 (well-registered):")
+        ranked.takeRight(3).reverse.foreach { case (d, _, name) =>
+          println(f"    [✓]  $name%-40s  $d%.3f mm")
         }
-        val allDists = specDists.map(_._1)
-        println(f"  Overall: mean=${allDists.sum/allDists.length}%.3f  " +
-                f"max=${allDists.max}%.3f  min=${allDists.min}%.3f  mm")
       }
     }
 
-    println("\n" + "=" * 70)
-    println("  HOW TO USE THE VIEWER")
-    println("=" * 70)
-    println("  Eye icon  : show / hide a group")
-    println("  A_Original: raw input — should look unaligned")
-    println("  B_PassN   : registered — should overlap tightly; compare pass 1 vs 4")
-    println("  C_Means   : overlaid means — should be nearly identical if converged")
-    println("  D_SSM     : click it → drag Mode 0 slider to explore shape variation")
-    println("  E_Outlier : worst-fitting shapes — investigate if dist >> mean dist")
-    println("=" * 70)
+    println("\n" + "=" * 72)
+    println("  HOW TO USE")
+    println("=" * 72)
+    println("  Eye icon       : show / hide any group")
+    println("  A_Original     : raw — should look unaligned")
+    println("  B_PassN        : toggle pass 1 vs pass 4 to see improvement")
+    println("  C_Means        : 4 overlaid means — nearly identical = converged")
+    println("  D_DistMap      : colour map — blue=good, red=large residual error")
+    println("  E_SSM          : click it → drag Mode 0 slider to explore variation")
+    println("  F_Outliers     : worst specimens — re-register or exclude if > 3× avg")
+    println()
+    println("  TO COMPUTE SSM VALIDATION METRICS (compactness / generalization / specificity):")
+    println("    sbt \"runMain scapula.SSMValidation\"")
+    println("=" * 72)
     println("\nUI open. Close the window to exit.")
   }
 }
