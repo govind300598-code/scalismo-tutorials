@@ -177,9 +177,28 @@ object RebuildSSM {
       PreparedSpecimen(s.modelId, m, l)
     }
 
+    // ── Decimate initial reference to modelResolution ─────────────────────────
+    // All passes work at the target resolution so the GP and SSM are never
+    // built at the raw STL vertex count (which can be 50k+).
+    val initRef = preps.head
+    val initRefMesh: TriangleMesh[_3D] = {
+      val n = initRef.mesh.pointSet.numberOfPoints
+      if (n > Config.modelResolution) {
+        println(s"Decimating initial reference $n → ~${Config.modelResolution} vertices " +
+                s"(Voronoi coarsening)...")
+        val dec = ScapulaData.decimateInCorrespondence(
+          initRef.mesh, IndexedSeq(initRef.mesh), Config.modelResolution)
+        println(s"  Actual: ${dec.head.pointSet.numberOfPoints} vertices")
+        dec.head
+      } else {
+        println(s"Initial reference: $n vertices (≤ ${Config.modelResolution}, no decimation needed)")
+        initRef.mesh
+      }
+    }
+
     // ── Iterative passes ──────────────────────────────────────────────────────
-    var currentRefMesh: TriangleMesh[_3D]       = preps.head.mesh
-    var currentRefLms:  IndexedSeq[Landmark[_3D]] = preps.head.lms
+    var currentRefMesh: TriangleMesh[_3D]         = initRefMesh
+    var currentRefLms:  IndexedSeq[Landmark[_3D]] = initRef.lms
 
     val ssmMeans  = scala.collection.mutable.ArrayBuffer.empty[TriangleMesh[_3D]]
     val ssmRanks  = scala.collection.mutable.ArrayBuffer.empty[Int]
