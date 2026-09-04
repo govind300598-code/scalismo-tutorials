@@ -11,13 +11,27 @@ import java.io.File
 /**
  * Scalismo UI visualisation application.
  *
- * Shows (all optional, presence detected from output folders):
- *   Group "Original"    – a subset of original non-registered scapulae
- *   Group "Rigid"       – landmark-rigid registered scapulae (SSM1 pass)
- *   Group "NonRigid"    – GPMM registered scapulae (SSM1 pass)
- *   Group "Means"       – Mean1, Mean2, Mean3, Mean4
- *   Group "SSM1_Modes"  – modes 1-3 at -3σ / mean / +3σ
- *   …                   – repeated for SSM2, SSM3, SSM4
+ * Groups shown (all optional, detected from output folders):
+ *
+ *   Original_AllLeft    – raw original scapulae, R ones mirrored to L frame
+ *   SSMn_Rigid          – landmark + ICP aligned (before non-rigid step)
+ *   SSMn_NonRigid       – GPMM registered (dense correspondence, ready for PCA)
+ *   SSMn_Modes          – static mode meshes: mode 1-3 at −3σ / mean / +3σ
+ *   SSMn_Interactive    – live SSM slider: drag mode sliders to explore shape space
+ *   Means               – Mean1, Mean2, Mean3, Mean4 overlaid
+ *
+ * HOW TO USE THE UI
+ * ─────────────────
+ * Scene panel (left):  click the eye icon to show/hide any group or mesh.
+ *                      Expand a group to reach individual shapes.
+ * SSMn_Interactive:    select it → a "Shape Model" panel appears on the right.
+ *                      Drag the slider for "Mode 1 (xx.x%)" left/right to see
+ *                      the main axis of shape variation.  Mode 2, Mode 3, … do
+ *                      the same for their axes.  Click "Reset" to return to mean.
+ * SSMn_Modes:          shows fixed meshes at −3σ, mean, +3σ for modes 1-3 so
+ *                      you can turn them on/off and compare side by side.
+ * Original_AllLeft:    the raw (non-registered) scapulae – compare these with
+ *                      SSMn_Rigid and SSMn_NonRigid to see alignment quality.
  *
  * Run with: sbt "runMain scapula.VisualizationApp"
  */
@@ -96,14 +110,28 @@ object VisualizationApp {
           means += (s"Mean$iter" -> mean)
         }
 
-        // SSM model + mode deformations
+        // SSM model: interactive slider + static mode meshes
         loadModel(modelFile).foreach { ssm =>
-          val modesGroup = ui.createGroup(s"${label}_Modes")
-          val nModes     = math.min(3, ssm.rank)
-          println(s"$label rank=${ssm.rank}, showing modes 1-$nModes (±3σ)")
+          val evs    = ssm.gp.klBasis.map(_.eigenvalue)
+          val total  = evs.sum
+          val nModes = math.min(3, ssm.rank)
 
+          println(s"$label  rank=${ssm.rank}")
+          evs.take(5).zipWithIndex.foreach { case (ev, i) =>
+            println(f"  mode ${i+1}: ${ev / total * 100}%.1f%% variance  (std-dev=${math.sqrt(ev)}%.2f mm)")
+          }
+
+          // ── Interactive slider (drag to explore shape space live) ───────────
+          val interactiveGroup = ui.createGroup(s"${label}_Interactive")
+          ui.show(interactiveGroup, ssm, s"$label")
+          println(s"  → ${label}_Interactive: select this in the scene panel, then use")
+          println(s"    the 'Shape Model' sliders on the right to explore modes.")
+
+          // ── Static ±3σ meshes for side-by-side comparison ──────────────────
+          val modesGroup = ui.createGroup(s"${label}_Modes")
           for (modeIdx <- 0 until nModes) {
-            val stdDev = math.sqrt(ssm.gp.klBasis(modeIdx).eigenvalue)
+            val stdDev   = math.sqrt(evs(modeIdx))
+            val modePct  = evs(modeIdx) / total * 100
             for (alpha <- Seq(-3.0, 0.0, 3.0)) {
               val coeffs = DenseVector.zeros[Double](ssm.rank)
               coeffs(modeIdx) = alpha * stdDev
@@ -112,7 +140,7 @@ object VisualizationApp {
                 if (alpha < 0) s"m${(-alpha).toInt}sd"
                 else if (alpha == 0.0) "mean"
                 else s"p${alpha.toInt}sd"
-              ui.show(modesGroup, shape, s"${label}_mode${modeIdx + 1}_$tag")
+              ui.show(modesGroup, shape, f"${label}_mode${modeIdx+1}(${modePct}%.1f%%)_$tag")
             }
           }
         }
