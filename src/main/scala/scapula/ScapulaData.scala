@@ -33,7 +33,7 @@ object Config {
    * Number of registration passes. Pass 1 registers to an arbitrary specimen; each further pass rebuilds the reference
    * as the mean of the previous pass and re-registers. This removes reference bias.
    */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
   /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
   val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble

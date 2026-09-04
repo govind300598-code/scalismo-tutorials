@@ -14,48 +14,41 @@ import java.io.File
 import scala.util.{Failure, Success}
 
 /**
- * Full multi-pass SSM construction pipeline.
+ * Iterative multi-pass SSM construction pipeline (GPA-style).
  *
- * Implements the 4-step SSM workflow:
- *   1. Register all specimens to an initial arbitrary reference (Pass 1).
- *   2. Build SSM₁ from Pass 1 → take its PCA mean as a bias-free new reference.
- *   3. Re-register all specimens to the mean-shape reference (Pass 2).
- *   4. Build SSM₂ from Pass 2.  Report a STABILITY metric:
- *      mean-surface-distance between the Pass 1 and Pass 2 mean shapes.
- *      Convergence (< 1 mm shift) confirms the reference bias has been removed.
+ * Algorithm:
+ *   Pass 1  : register all specimens → arbitrary initial reference (first specimen).
+ *             Build SSM₁ via PCA.  Mean shape = new reference.
+ *   Pass 2  : register all specimens → SSM₁ mean.
+ *             Build SSM₂.  Mean shape = new reference.
+ *   Pass k  : register all specimens → SSM_{k-1} mean.
+ *             Build SSMₖ.
+ *   ...
+ *   Pass N  : final model SSMₙ.
+ *
+ * At each step a STABILITY metric is printed:
+ *   surface distance between consecutive mean shapes.
+ *   Convergence (< 1 mm mean shift) confirms reference bias has been removed.
+ *
+ * Number of passes is controlled by SCAPULA_REFINE_PASSES (default 4).
  *
  * Methods used
  * ────────────
- *  • Landmark-based Procrustes rigid registration (RigidAlign.landmarkThenIcp)
- *  • Trimmed rigid ICP to refine pose
+ *  • Landmark-based Procrustes rigid registration + trimmed rigid ICP
  *  • Single isotropic Gaussian kernel GP prior
  *  • Pivoted-Cholesky low-rank approximation with NearestNeighborInterpolator3D
- *  • GP-ICP: iterated nearest-neighbour posterior regression (non-rigid registration)
- *  • GPA-style bias removal via iterative mean-shape reference update
+ *  • GP-ICP: iterated nearest-neighbour posterior regression (non-rigid)
+ *  • GPA-style iterative mean-shape reference update
  *  • PCA-based SSM (PointDistributionModel.createUsingPCA)
  *
  * Usage:
  *   sbt "runMain scapula.RebuildSSM"
- *   SCAPULA_DATA_DIR=/x SCAPULA_OUT_DIR=/y sbt "runMain scapula.RebuildSSM"
- *
- * Tuning (all overridable via environment variables):
- *   SCAPULA_KERNEL_SIGMA   bandwidth in mm          (default 70.0)
- *   SCAPULA_KERNEL_SCALE   deformation scale in mm  (default 30.0)
- *   SCAPULA_ICP_SIGMA2     noise variance mm²        (default 2.0)
- *   SCAPULA_GP_TOL         Cholesky tolerance        (default 0.01)
- *   SCAPULA_ICP_ITERS      GP-ICP iterations         (default 40)
- *   SCAPULA_MODEL_RES      target vertex count       (default 8000)
+ *   SCAPULA_DATA_DIR=/x SCAPULA_OUT_DIR=/y SCAPULA_REFINE_PASSES=4 sbt "runMain scapula.RebuildSSM"
  */
 object RebuildSSM {
 
   // ── GP model construction ──────────────────────────────────────────────────
 
-  /**
-   * Build a low-rank GP prior on `reference` using a single isotropic Gaussian kernel.
-   * The kernel is: k(x,y) = scale² · exp(−‖x−y‖² / (2σ²)) · I₃
-   * The NearestNeighborInterpolator3D is used so the GP can be evaluated at
-   * arbitrary positions on the reference mesh without costly kernel evaluations.
-   */
   def buildGpModel(
     reference: TriangleMesh[_3D]
   )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
@@ -63,39 +56,21 @@ object RebuildSSM {
     val zeroMean = Field[_3D, EuclideanVector[_3D]](
       EuclideanSpace[_3D], _ => EuclideanVector.zeros[_3D])
 
-    // Single isotropic Gaussian kernel, replicated independently for each axis
     val scalarKernel = GaussianKernel[_3D](Config.kernelSigma) * Config.kernelScale
     val kernel       = DiagonalKernel(scalarKernel, outputDim = 3)
+    val gp           = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
 
-    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
-
-    // Pivoted-Cholesky low-rank approximation; NearestNeighborInterpolator so
-    // the GP can be evaluated at any mesh vertex without extra kernel calls.
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       domain            = reference.pointSet,
       gp                = gp,
       relativeTolerance = Config.gpRelativeTolerance,
       interpolator      = NearestNeighborInterpolator3D()
     )
-
     PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
   }
 
   // ── GP-ICP non-rigid registration ─────────────────────────────────────────
 
-  /**
-   * Non-rigid registration via iterated nearest-neighbour GP posterior.
-   *
-   * At each iteration:
-   *   1. Sample `numPoints` spatially uniform vertices from the current fitted mesh.
-   *   2. For each, find the nearest point on the TARGET surface (NN correspondence).
-   *   3. Treat correspondences as noisy observations of the deformation field
-   *      and compute the posterior GP model given them.
-   *   4. The next iteration starts from the posterior mean.
-   *
-   * The NearestNeighborInterpolator in the GP prior makes step 2→3 efficient:
-   * the posterior coefficients are solved in low-rank space (O(n·r²) not O(n³)).
-   */
   def gpIcp(
     model:      PointDistributionModel[_3D, TriangleMesh],
     target:     TriangleMesh[_3D],
@@ -107,18 +82,14 @@ object RebuildSSM {
     val targetOps = target.operations
     var current   = model
 
-    for (iter <- 0 until iterations) {
+    for (_ <- 0 until iterations) {
       val fitted = current.mean
-
-      // Nearest-neighbour correspondences: fitted vertex → closest point on target surface
       val sampleIds = RigidAlign.uniformIds(fitted, numPoints)
       val observations: IndexedSeq[(PointId, Point[_3D])] = sampleIds.map { id =>
         val fittedPt  = fitted.pointSet.point(id)
         val closestPt = targetOps.closestPointOnSurface(fittedPt).point
         (id, closestPt)
       }
-
-      // Bayesian update: posterior mean = best-fit deformation of reference
       current = current.posterior(observations, sigma2)
     }
     current.mean
@@ -153,18 +124,14 @@ object RebuildSSM {
       val tag = s"[${i+1}/${preps.length}]"
       print(s"  $tag  ${p.modelId}  rigid-align ...")
 
-      // ── Step 1: Landmark Procrustes + trimmed rigid ICP ──────────────────
       val (rigidMesh, rigidLms) = RigidAlign.landmarkThenIcp(p.mesh, p.lms, refMesh, refLms)
 
       print(s"  gp-icp (${Config.icpIterations} iter) ...")
 
-      // ── Step 2: GP-ICP non-rigid registration ────────────────────────────
       val registered = gpIcp(gpModel, rigidMesh)
-
-      val st   = Metrics.symmetric(registered, rigidMesh)
+      val st = Metrics.symmetric(registered, rigidMesh)
       println(f"  done | resid ${st.render}")
 
-      // Save registered mesh
       val outF = new File(passDir, s"reg_${p.modelId}.stl")
       MeshIO.writeMesh(registered, outF) match {
         case Failure(e) => println(s"  WARNING: could not save ${outF.getName}: ${e.getMessage}")
@@ -181,21 +148,22 @@ object RebuildSSM {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
-    val dataDir  = Config.dataDir
-    val outDir   = Config.outDir
-    val pass1Dir = new File(outDir, "pass1")
-    val pass2Dir = new File(outDir, "pass2")
+    val dataDir    = Config.dataDir
+    val outDir     = Config.outDir
+    val nPasses    = Config.refinePasses
     outDir.mkdirs()
 
     println(s"Data dir : ${dataDir.getAbsolutePath}")
     println(s"Out dir  : ${outDir.getAbsolutePath}")
+    println(s"Passes   : $nPasses")
+    println(s"Kernel   : σ=${Config.kernelSigma} mm, scale=${Config.kernelScale} mm")
+    println(s"GP-ICP   : ${Config.icpIterations} iterations, σ²=${Config.icpSigma2}")
 
     // ── Load data ────────────────────────────────────────────────────────────
     val (lmMap, _, _) = ScapulaData.readLandmarkCsv(ScapulaData.csvFile(dataDir))
     val specimens     = ScapulaData.specimens(dataDir).filter(s => lmMap.contains(s.modelId))
     println(s"Specimens with landmarks: ${specimens.length}")
 
-    // Orient all meshes to left-scapula frame (mirror right → left)
     val preps: IndexedSeq[PreparedSpecimen] = specimens.map { s =>
       val (m, l) =
         if (s.isRight) (ScapulaData.mirrorMesh(ScapulaData.loadMesh(s.file)),
@@ -204,80 +172,86 @@ object RebuildSSM {
       PreparedSpecimen(s.modelId, m, l)
     }
 
-    // ── PASS 1: register to first specimen as reference ───────────────────────
-    val ref0     = preps.head
-    val p1Out    = doPass("PASS 1", pass1Dir, preps, ref0.mesh, ref0.lms)
-    val p1Meshes = p1Out.map(_._1)
-    val p1Lms    = p1Out.map(_._2)
+    // ── Iterative passes ──────────────────────────────────────────────────────
+    var currentRefMesh: TriangleMesh[_3D]       = preps.head.mesh
+    var currentRefLms:  IndexedSeq[Landmark[_3D]] = preps.head.lms
 
-    // Build SSM₁ from pass 1 → mean shape = new reference
-    println("\nBuilding SSM₁ from pass 1...")
-    val dc1  = DataCollection.fromTriangleMesh3DSequence(p1Meshes.head, p1Meshes)
-    val ssm1 = PointDistributionModel.createUsingPCA(dc1)
-    println(f"  SSM₁ rank = ${ssm1.rank}  |  ${p1Meshes.length} specimens")
+    val ssmMeans  = scala.collection.mutable.ArrayBuffer.empty[TriangleMesh[_3D]]
+    val ssmRanks  = scala.collection.mutable.ArrayBuffer.empty[Int]
 
-    val mean1 = ssm1.mean
-    MeshIO.writeMesh(mean1, new File(outDir, "mean_pass1.stl")).toOption
-    println(s"  Mean shape → mean_pass1.stl")
+    for (pass <- 1 to nPasses) {
+      val passDir = new File(outDir, s"pass$pass")
 
-    // Reference landmarks for pass 2 = mean of all rigidly-aligned landmark positions
-    // (approximates the landmark positions on the mean mesh)
-    val pass2RefLms: IndexedSeq[Landmark[_3D]] = ScapulaData.landmarkNames.map { nm =>
-      val pts = p1Lms.flatMap(_.find(_.id == nm).map(_.point))
-      Landmark(nm, Point3D(pts.map(_.x).sum / pts.length,
-                           pts.map(_.y).sum / pts.length,
-                           pts.map(_.z).sum / pts.length))
+      val pOut    = doPass(s"PASS $pass / $nPasses", passDir, preps, currentRefMesh, currentRefLms)
+      val pMeshes = pOut.map(_._1)
+      val pLms    = pOut.map(_._2)
+
+      // Build SSMₖ
+      println(s"\nBuilding SSM$pass from pass $pass...")
+      val dc  = DataCollection.fromTriangleMesh3DSequence(pMeshes.head, pMeshes)
+      val ssm = PointDistributionModel.createUsingPCA(dc)
+      println(f"  SSM$pass rank = ${ssm.rank}  |  ${pMeshes.length} specimens")
+
+      val mean = ssm.mean
+      MeshIO.writeMesh(mean, new File(outDir, s"mean_pass$pass.stl")).toOption
+      println(s"  Mean shape → mean_pass$pass.stl")
+
+      // Stability vs previous mean
+      if (ssmMeans.nonEmpty) {
+        val prevMean  = ssmMeans.last
+        val stability = Metrics.symmetric(prevMean, mean)
+        println(f"\n  ── Stability check (pass ${pass-1} mean ↔ pass $pass mean) ──")
+        println(f"    ${stability.render}")
+        if (stability.mean < 1.0)
+          println(f"  ✓ CONVERGED  (mean shift = ${stability.mean}%.3f mm < 1 mm)")
+        else
+          println(f"  ✗ not yet converged  (${stability.mean}%.3f mm)")
+      }
+
+      ssmMeans  += mean
+      ssmRanks  += ssm.rank
+
+      // Prepare reference for next pass
+      if (pass < nPasses) {
+        // Reference landmarks = mean of rigidly-aligned landmark positions from this pass
+        val nextRefLms: IndexedSeq[Landmark[_3D]] = ScapulaData.landmarkNames.map { nm =>
+          val pts = pLms.flatMap(_.find(_.id == nm).map(_.point))
+          Landmark(nm, Point3D(pts.map(_.x).sum / pts.length,
+                               pts.map(_.y).sum / pts.length,
+                               pts.map(_.z).sum / pts.length))
+        }
+
+        // Decimate mean if needed for faster GP computation
+        val nextRefMesh = {
+          val n = mean.pointSet.numberOfPoints
+          if (n > Config.modelResolution) {
+            println(s"  Decimating mean reference $n → ~${Config.modelResolution} vertices...")
+            ScapulaData.decimateInCorrespondence(mean, IndexedSeq(mean), Config.modelResolution).head
+          } else mean
+        }
+
+        currentRefMesh = nextRefMesh
+        currentRefLms  = nextRefLms
+      }
     }
 
-    // Optionally decimate mean shape for faster GP computation in pass 2
-    val mean1Ref = {
-      val n = mean1.pointSet.numberOfPoints
-      if (n > Config.modelResolution) {
-        println(s"  Decimating mean reference $n → ~${Config.modelResolution} vertices...")
-        ScapulaData.decimateInCorrespondence(mean1, IndexedSeq(mean1), Config.modelResolution).head
-      } else mean1
+    // ── Final stability summary across all consecutive pairs ──────────────────
+    println(s"\n══════════════════════════════════════════════════════════════")
+    println(s"Pipeline complete.  $nPasses passes.  Results in: ${outDir.getAbsolutePath}")
+    println(s"══════════════════════════════════════════════════════════════")
+    for (pass <- 1 to nPasses) {
+      println(f"  pass$pass/   — ${preps.length} registered meshes  |  SSM$pass rank = ${ssmRanks(pass-1)}")
     }
-
-    // ── PASS 2: re-register to mean shape (GPA-style reference update) ────────
-    val p2Out    = doPass("PASS 2", pass2Dir, preps, mean1Ref, pass2RefLms)
-    val p2Meshes = p2Out.map(_._1)
-
-    // Build final SSM₂ from pass 2
-    println("\nBuilding final SSM₂ from pass 2...")
-    val dc2  = DataCollection.fromTriangleMesh3DSequence(p2Meshes.head, p2Meshes)
-    val ssm2 = PointDistributionModel.createUsingPCA(dc2)
-    println(f"  SSM₂ rank = ${ssm2.rank}  |  ${p2Meshes.length} specimens")
-
-    val mean2 = ssm2.mean
-    MeshIO.writeMesh(mean2, new File(outDir, "mean_pass2.stl")).toOption
-    println(s"  Mean shape → mean_pass2.stl")
-
-    // ── STABILITY CHECK: compare mean shapes across passes ────────────────────
-    println("\n─── Stability check (Step 4): mean shape convergence ───")
-    println("    Measures whether the GPA reference-update converged.")
-    println("    A small shift (< 1 mm mean) confirms reference bias has been removed.\n")
-
-    // Use surface-distance (no correspondence needed) to compare mean shapes
-    val stability = Metrics.symmetric(mean1, mean2)
-    println(f"  Pass 1 mean ↔ Pass 2 mean surface distance:")
-    println(f"    ${stability.render}")
-    if (stability.mean < 1.0)
-      println(s"  ✓ CONVERGED  (mean shift = ${stability.mean}%.3f mm < 1 mm threshold)")
-    else
-      println(s"  ✗ NOT CONVERGED  (mean shift = ${stability.mean}%.3f mm). " +
-              s"Set SCAPULA_REFINE_PASSES=3 and re-run.")
-
-    // ── Summary ───────────────────────────────────────────────────────────────
-    println(s"\n══════════════════════════════════════════════════")
-    println(s"Pipeline complete. Results in: ${outDir.getAbsolutePath}")
-    println(s"══════════════════════════════════════════════════")
-    println(s"  pass1/   — ${p1Meshes.length} registered meshes (initial reference)")
-    println(s"  pass2/   — ${p2Meshes.length} registered meshes (mean-shape reference)")
-    println(s"  mean_pass1.stl  — SSM₁ mean shape")
-    println(s"  mean_pass2.stl  — SSM₂ mean shape  (use for publication)")
+    if (ssmMeans.length >= 2) {
+      println(s"\n  Mean-shape convergence (consecutive passes):")
+      for (k <- 1 until ssmMeans.length) {
+        val st = Metrics.symmetric(ssmMeans(k-1), ssmMeans(k))
+        println(f"    pass${k} → pass${k+1}: mean=${st.mean}%.3f mm  hd95=${st.hd95}%.3f mm  hd=${st.hd}%.3f mm")
+      }
+    }
     println()
     println("Next steps:")
-    println("  sbt \"runMain scapula.SSMValidation\"    # compactness / generalization / specificity / HD / RMSE")
+    println("  sbt \"runMain scapula.SSMValidation\"    # compactness / generalization / specificity")
     println("  sbt \"runMain scapula.ViewSSM\"          # interactive SSM with PCA sliders")
     println("  sbt \"runMain scapula.ViewRegistration\" # target vs fitted comparison + metrics table")
   }
