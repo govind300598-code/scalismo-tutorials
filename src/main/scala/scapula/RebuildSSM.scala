@@ -65,6 +65,17 @@ object RebuildSSM {
 
     // Pass the TriangleMesh (not reference.pointSet) so the type matches
     // NearestNeighborInterpolator3D which is typed for TriangleMesh domain.
+    // NearestNeighborInterpolator3D — exact role:
+    //   The pivoted-Cholesky approximation produces eigenfunctions defined only
+    //   at the discrete set of mesh vertices.  NearestNeighborInterpolator3D
+    //   extends these piecewise-constant to *any* 3D query point by mapping it
+    //   to the nearest vertex.  This is used:
+    //     (a) inside gpIcp to evaluate the posterior at the current-mean vertex
+    //         positions after each ICP step, and
+    //     (b) when model.instance() is called to reconstruct a shape instance.
+    //   A smooth (barycentric) interpolator would give the same SSM; the
+    //   nearest-neighbour choice is faster and avoids triangle-quality issues in
+    //   the decimated mesh while introducing no bias in the correspondence step.
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       domain            = reference,
       gp                = gp,
@@ -259,18 +270,24 @@ object RebuildSSM {
       }
     }
 
-    // ── Final stability summary across all consecutive pairs ──────────────────
-    println(s"\n══════════════════════════════════════════════════════════════")
-    println(s"Pipeline complete.  $nPasses passes.  Results in: ${outDir.getAbsolutePath}")
-    println(s"══════════════════════════════════════════════════════════════")
+    // ── Final stability summary ───────────────────────────────────────────────
+    println(s"\n══════════════════════════════════════════════════════════════════════")
+    println(s"  Pipeline complete.  $nPasses passes.  σ=${Config.kernelSigma} mm  " +
+            s"scale=${Config.kernelScale} mm  res=${Config.modelResolution} pts")
+    println(s"══════════════════════════════════════════════════════════════════════")
+    println(f"  ${"Pass"}%-6s  ${"Specimens"}%9s  ${"SSM rank"}%8s  ${"Mean file"}")
+    println("  " + "─" * 50)
     for (pass <- 1 to nPasses) {
-      println(f"  pass$pass/   — ${preps.length} registered meshes  |  SSM$pass rank = ${ssmRanks(pass-1)}")
+      println(f"  pass$pass%-2s    ${preps.length}%9d  ${ssmRanks(pass-1)}%8d  mean_pass$pass.stl")
     }
     if (ssmMeans.length >= 2) {
-      println(s"\n  Mean-shape convergence (consecutive passes):")
+      println(s"\n  Surface-to-surface distances between consecutive mean shapes:")
+      println(f"  ${"Comparison"}%-18s  ${"Mean (mm)"}%10s  ${"RMS (mm)"}%9s  ${"HD95 (mm)"}%10s  Status")
+      println("  " + "─" * 65)
       for (k <- 1 until ssmMeans.length) {
-        val st = Metrics.symmetric(ssmMeans(k-1), ssmMeans(k))
-        println(f"    pass${k} → pass${k+1}: mean=${st.mean}%.3f mm  hd95=${st.hd95}%.3f mm  hd=${st.hd}%.3f mm")
+        val st  = Metrics.symmetric(ssmMeans(k-1), ssmMeans(k))
+        val tag = if (st.mean < 1.0) "✓ converged" else "  not yet "
+        println(f"  Mean$k ↔ Mean${k+1}             ${st.mean}%10.3f  ${st.rms}%9.3f  ${st.hd95}%10.3f  $tag")
       }
     }
     println()

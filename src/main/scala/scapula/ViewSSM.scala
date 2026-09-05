@@ -15,25 +15,32 @@ import java.io.File
  *
  * Scene groups (eye icon to show/hide):
  *
- *   A_Original              8 raw scapulae BEFORE registration (R mirrored to L).
- *                           Should look spread/unaligned — that is correct.
+ *   A_NonRegistered         ALL raw scapulae BEFORE any registration.
+ *                           Right-side bones mirrored to the left anatomical frame.
+ *                           These are at ORIGINAL resolution — NOT the 8k working mesh.
+ *                           EXPECT: shapes spread in space, unaligned. That is correct.
  *
  *   B_PassN_Registered      Up to 8 non-rigidly registered shapes from pass N.
- *                           All should tightly overlap → good correspondence.
- *                           Toggle pass 1 vs pass 4 to see improvement.
+ *                           (σ=30 mm kernel, scaleFactor=10 mm, 40 GP-ICP iterations)
+ *                           All should tightly overlap → good dense correspondence.
+ *                           Toggle Pass1 vs Pass4 to confirm registration improves.
  *
- *   C_Means                 All pass means overlaid. Should nearly coincide.
- *                           Console prints the mm distance between consecutive means.
+ *   C_Means                 Mean1, Mean2, Mean3, Mean4 overlaid.
+ *                           Should nearly coincide — console prints Mean1↔2, 2↔3, 3↔4 mm.
  *
- *   D_DistMap_PassN_<id>    Colour-coded surface distance: registered mesh → mean.
- *                           Blue = well-registered, Red = large residual.
+ *   D_DistMap_PassN         Colour-coded surface-to-surface distance: registered → mean.
+ *                           Blue = small residual, Red = large residual.
  *                           First 4 specimens shown per pass.
  *
- *   E_SSM_Interactive       Interactive SSM (pass 4 / last available).
- *                           Click it → drag Mode sliders in right panel.
+ *   E_SSM_Interactive       Interactive SSM (last available pass, FULL resolution).
+ *                           Click it → drag Mode 0 slider in right panel.
  *                           Mode 0 = main axis of shape variation.
  *
  *   F_Outliers              3 worst-fitting specimens shown alongside SSM mean.
+ *
+ *   G_ModeK (K=1,2,3)       Static shapes at Mean ± 1σ and ± 2σ along PCA mode K.
+ *                           Shows the physical deformation each mode produces.
+ *                           Toggling all 5 meshes in one group = Mode K atlas.
  *
  * Usage:
  *   sbt "runMain scapula.ViewSSM"
@@ -73,57 +80,65 @@ object ViewSSM {
 
     val ui = ScalismoUI("Scapula SSM — Visual Inspection")
 
-    // ── A. Original (non-registered) scapulae ──────────────────────────────
-    println("\n[A] Original (non-registered) scapulae")
+    // ── A. Non-registered scapulae at ORIGINAL resolution ─────────────────
+    println("\n[A] Non-registered scapulae (ORIGINAL full-resolution STLs)")
     val specimens = ScapulaData.specimens(dataDir)
-    val origGrp   = ui.createGroup("A_Original (raw, before registration)")
-    specimens.take(8).foreach { spec =>
+    val origGrp   = ui.createGroup(
+      s"A_NonRegistered (${specimens.length} raw bones — BEFORE any registration)")
+    specimens.foreach { spec =>
       val raw  = ScapulaData.loadMesh(spec.file)
       val mesh = if (spec.isRight) ScapulaData.mirrorMesh(raw) else raw
-      ui.show(origGrp, mesh, spec.modelId + (if (spec.isRight) "_mirrored" else ""))
+      val tag  = if (spec.isRight) "_R→L" else ""
+      ui.show(origGrp, mesh, spec.modelId + tag)
     }
-    println(s"  ${math.min(8, specimens.length)} meshes loaded. R ones mirrored to L frame.")
+    println(s"  ${specimens.length} meshes loaded at original resolution.")
+    println("  Right-side bones mirrored to left anatomical frame.")
     println("  EXPECT: shapes spread in space — unaligned is correct here.")
+    println("  NOTE: these are the PRESERVED original meshes, NOT the 8k working copies.")
 
     // ── B. Registered meshes per pass ──────────────────────────────────────
-    val passDirs = (1 to 4).map(n => n -> new File(baseDir, s"pass$n"))
+    val passDirs = (1 to 8).map(n => n -> new File(baseDir, s"pass$n"))
       .filter(_._2.isDirectory)
 
     passDirs.foreach { case (n, passDir) =>
       val files = regFilesIn(passDir)
       if (files.nonEmpty) {
         println(s"\n[B] Pass $n registered meshes (${files.length} total, showing first 8)")
-        val grp = ui.createGroup(s"B_Pass${n}_Registered")
+        println(s"  σ=${Config.kernelSigma} mm, scaleFactor=${Config.kernelScale} mm, " +
+                s"res=${files.head.getName}")
+        val grp = ui.createGroup(
+          s"B_Pass${n}_Registered (${files.length} meshes, σ=${Config.kernelSigma.toInt}mm)")
         files.take(8).foreach { f =>
           ui.show(grp, ScapulaData.loadMesh(f),
             f.getName.stripSuffix(".stl").stripPrefix("reg_"))
         }
         println(s"  EXPECT: all shapes overlap tightly → good dense correspondence.")
+        println(s"  Compare B_Pass1 vs B_Pass4 to confirm registration improvement.")
       }
     }
 
-    // ── C. Mean shapes (convergence) ───────────────────────────────────────
-    println("\n[C] Population means — convergence check")
-    val meansGrp   = ui.createGroup("C_Means (convergence — should < 1 mm shift)")
+    // ── C. Mean1–Mean4 (convergence check) ────────────────────────────────
+    println("\n[C] Mean shapes (Mean1–Mean4) — GPA convergence check")
+    val meansGrp   = ui.createGroup("C_Means (Mean1–Mean4 overlaid — < 1 mm = converged)")
     val loadedMeans = scala.collection.mutable.ArrayBuffer.empty[(Int, TriangleMesh[_3D])]
-    (1 to 4).foreach { n =>
+    (1 to 8).foreach { n =>
       val f = new File(baseDir, s"mean_pass$n.stl")
       if (f.exists()) {
         val m = ScapulaData.loadMesh(f)
-        ui.show(meansGrp, m, s"mean_pass$n")
+        ui.show(meansGrp, m, s"Mean$n")
         loadedMeans += (n -> m)
-        println(s"  mean_pass$n: ${m.pointSet.numberOfPoints} vertices")
+        println(s"  Mean$n: ${m.pointSet.numberOfPoints} vertices (mean_pass$n.stl)")
       }
     }
     if (loadedMeans.length >= 2) {
-      println("  Consecutive mean distances (CONVERGENCE TABLE):")
-      println(f"  ${"Comparison"}%-20s  ${"Mean"}%6s  ${"RMS"}%6s  ${"HD95"}%6s  ${"Status"}")
-      println("  " + "-" * 55)
+      println(f"\n  Surface-to-surface distances between consecutive means:")
+      println(f"  ${"Comparison"}%-14s  ${"Mean (mm)"}%10s  ${"RMS (mm)"}%9s  ${"HD95 (mm)"}%10s  Status")
+      println("  " + "─" * 60)
       loadedMeans.sliding(2).foreach { w =>
         val (n1, m1) = w(0); val (n2, m2) = w(1)
         val st = Metrics.symmetric(m1, m2)
-        val ok = if (st.mean < 1.0) "✓ converged" else "! not converged"
-        println(f"  pass$n1 → pass$n2             ${st.mean}%6.3f  ${st.rms}%6.3f  ${st.hd95}%6.3f  $ok")
+        val ok = if (st.mean < 1.0) "✓ converged" else "  not yet "
+        println(f"  Mean$n1 ↔ Mean$n2          ${st.mean}%10.3f  ${st.rms}%9.3f  ${st.hd95}%10.3f  $ok")
       }
     }
 

@@ -43,15 +43,20 @@ object Config {
 
   /**
    * Gaussian kernel bandwidth (mm) — spatial extent of the deformation field.
-   * Smaller σ = more local deformations. 20 mm is appropriate for scapula sub-structure fitting.
+   * σ=30 mm: deformations remain correlated across the full scapular body (~120 mm wide),
+   * while still localising to sub-structures (acromion, glenoid, coracoid).
+   * Used for SSM1–SSM4 to guarantee a fair comparison across passes.
    */
-  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "20.0").toDouble
+  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "30.0").toDouble
 
   /**
-   * Gaussian kernel output scale (mm) — maximum magnitude of allowed deformations.
-   * 5 mm keeps the non-rigid step from overcorrecting after the rigid alignment.
+   * Gaussian kernel amplitude (mm) — maximum magnitude of allowed deformations.
+   * scaleFactor=10 mm: after landmark+ICP rigid alignment, residual shape differences
+   * are typically 5–15 mm, so ±10 mm gives the GP enough room to fit without
+   * overcorrecting.  The covariance matrix entry is scaleFactor² = 100 mm².
+   * Used identically for SSM1–SSM4.
    */
-  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "5.0").toDouble
+  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "10.0").toDouble
 
   /** Noise variance (mm²) for GP-ICP posterior regression. Lower = tighter fit. */
   val icpSigma2: Double = env("SCAPULA_ICP_SIGMA2", "2.0").toDouble
