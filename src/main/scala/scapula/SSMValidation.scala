@@ -42,31 +42,54 @@ object SSMValidation {
 
     val ssmLabels = Seq("SSM1", "SSM2", "SSM3", "SSM4")
 
-    // ── Load saved models and registered meshes ────────────────────────────────
-    val ssmData = ssmLabels.map { label =>
-      val modelFile = new File(resultsDir, s"$label/model/$label.h5")
-      val regDir    = new File(resultsDir, s"$label/nonrigid_registered")
+    // ── Detect folder layout (new results/SSMn/ vs old pass{n}/) ──────────────
+    // New layout: outDir/results/SSM{n}/model/SSM{n}.h5
+    // Old layout: outDir/pass{n}/reg_*.stl  (RebuildSSM output)
+    def stlsIn(dir: File, prefix: String = ""): IndexedSeq[File] =
+      if (!dir.isDirectory) IndexedSeq.empty
+      else Option(dir.listFiles()).getOrElse(Array.empty)
+        .filter(f => f.getName.endsWith(".stl") && f.getName.startsWith(prefix))
+        .sorted.toIndexedSeq
 
+    val useNewLayout = new File(resultsDir, "SSM1").isDirectory
+
+    // ── Load saved models and registered meshes ────────────────────────────────
+    val ssmData = ssmLabels.zipWithIndex.map { case (label, idx) =>
+      val passNum = idx + 1
       println(s"Loading $label ...")
 
-      if (!modelFile.exists())
-        throw new FileNotFoundException(
-          s"Model not found: $modelFile\n  → Run 'sbt runMain scapula.Main' first.")
-
-      val model = StatisticalModelIO.readStatisticalMeshModel(modelFile)
-        .getOrElse(throw new RuntimeException(s"Cannot load model: $modelFile"))
-      println(s"  rank = ${model.rank}")
-
-      if (!regDir.exists() || !regDir.isDirectory)
-        throw new FileNotFoundException(s"Registered mesh directory not found: $regDir")
-
-      val stlFiles = regDir.listFiles().filter(_.getName.endsWith(".stl")).sorted
-      require(stlFiles.nonEmpty, s"No registered STLs found in $regDir")
-
-      val meshes = stlFiles.map { f =>
-        MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot load: $f"))
-      }.toIndexedSeq
+      val meshes: IndexedSeq[TriangleMesh[_3D]] = if (useNewLayout) {
+        val regDir   = new File(resultsDir, s"$label/nonrigid_registered")
+        if (!regDir.isDirectory) throw new FileNotFoundException(
+          s"Directory not found: $regDir\n  → Run 'sbt runMain scapula.Main' first.")
+        val stlFiles = stlsIn(regDir)
+        require(stlFiles.nonEmpty, s"No registered STLs in $regDir")
+        stlFiles.map(f => MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot load: $f")))
+      } else {
+        // Old layout: outDir/pass{n}/reg_*.stl
+        val passDir  = new File(outDir, s"pass$passNum")
+        if (!passDir.isDirectory) throw new FileNotFoundException(
+          s"Pass directory not found: $passDir")
+        val stlFiles = stlsIn(passDir, prefix = "reg_")
+        require(stlFiles.nonEmpty, s"No reg_*.stl found in $passDir")
+        stlFiles.map(f => MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot load: $f")))
+      }
       println(s"  ${meshes.length} registered meshes loaded")
+
+      // Load or build the SSM
+      val model: StatisticalMeshModel = if (useNewLayout) {
+        val modelFile = new File(resultsDir, s"$label/model/$label.h5")
+        if (!modelFile.exists()) throw new FileNotFoundException(s"Model not found: $modelFile")
+        StatisticalModelIO.readStatisticalMeshModel(modelFile)
+          .getOrElse(throw new RuntimeException(s"Cannot load: $modelFile"))
+      } else {
+        // Build SSM on-the-fly from the registered meshes via PCA
+        println(s"  Building $label SSM from ${meshes.length} meshes via PCA...")
+        val dc = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
+        StatisticalMeshModel.createUsingPCA(dc)
+          .getOrElse(throw new RuntimeException(s"PCA failed for $label"))
+      }
+      println(s"  rank = ${model.rank}")
 
       (label, model, meshes)
     }
