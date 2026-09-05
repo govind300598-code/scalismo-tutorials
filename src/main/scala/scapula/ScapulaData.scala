@@ -67,7 +67,7 @@ object Config {
    * Override with SCAPULA_REF_IDX=<n> to choose any specimen.
    * Tip: pick a left-side specimen near the middle of the dataset for least reference bias.
    */
-  val refIdx: Int = env("SCAPULA_REF_IDX", "12").toInt
+  val refIdx: Int = env("SCAPULA_REF_IDX", "2").toInt
 
   val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
 
