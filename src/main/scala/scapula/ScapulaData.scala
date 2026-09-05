@@ -2,9 +2,12 @@ package scapula
 
 import scalismo.geometry.*
 import scalismo.mesh.*
+import scalismo.common.PointId
 import scalismo.io.MeshIO
+import scalismo.numerics.UniformMeshSampler3D
 import scalismo.registration.LandmarkRegistration
 import scalismo.transformations.TranslationAfterRotation
+import scalismo.utils.Random
 
 import java.io.File
 import scala.io.Source
@@ -17,11 +20,11 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
+  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/non_rigid_aligned_output"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
 
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
@@ -30,7 +33,7 @@ object Config {
    * Number of registration passes. Pass 1 registers to an arbitrary specimen; each further pass rebuilds the reference
    * as the mean of the previous pass and re-registers. This removes reference bias.
    */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
   /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
   val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble
@@ -39,9 +42,33 @@ object Config {
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
   /**
-   * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
-   * are NOT statistically independent samples; including both inflates apparent sample size.
+   * Gaussian kernel bandwidth (mm) — spatial extent of the deformation field.
+   * σ=30 mm: deformations remain correlated across the full scapular body (~120 mm wide),
+   * while still localising to sub-structures (acromion, glenoid, coracoid).
+   * Used for SSM1–SSM4 to guarantee a fair comparison across passes.
    */
+  val kernelSigma: Double = env("SCAPULA_KERNEL_SIGMA", "30.0").toDouble
+
+  /**
+   * Gaussian kernel amplitude (mm) — maximum magnitude of allowed deformations.
+   * scaleFactor=10 mm: after landmark+ICP rigid alignment, residual shape differences
+   * are typically 5–15 mm, so ±10 mm gives the GP enough room to fit without
+   * overcorrecting.  The covariance matrix entry is scaleFactor² = 100 mm².
+   * Used identically for SSM1–SSM4.
+   */
+  val kernelScale: Double = env("SCAPULA_KERNEL_SCALE", "10.0").toDouble
+
+  /** Noise variance (mm²) for GP-ICP posterior regression. Lower = tighter fit. */
+  val icpSigma2: Double = env("SCAPULA_ICP_SIGMA2", "2.0").toDouble
+
+  /**
+   * 0-based index into the sorted specimen list to use as the initial reference for pass 1.
+   * Default 12 = a mid-dataset left-side specimen (avoids mirroring bias from right-side #001).
+   * Override with SCAPULA_REF_IDX=<n> to choose any specimen.
+   * Tip: pick a left-side specimen near the middle of the dataset for least reference bias.
+   */
+  val refIdx: Int = env("SCAPULA_REF_IDX", "2").toInt
+
   val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
 
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
@@ -194,6 +221,90 @@ object ScapulaData {
 
   def loadMesh(f: File): TriangleMesh[_3D] =
     MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Could not read mesh ${f.getPath}"))
+
+  /**
+   * Coarsen all `meshes` to ~`targetVertices` vertices while preserving point-to-point
+   * correspondence across the whole population.
+   *
+   * Algorithm — geodesic Voronoi coarsening:
+   *   1. Select ~targetVertices seed VERTEX IDs from `reference` via uniform spatial sampling.
+   *      Seeds are exact original vertices (no position movement → no spikes).
+   *   2. Multi-source BFS on the mesh graph assigns every vertex to the nearest seed cluster.
+   *   3. Each original triangle whose 3 vertices belong to 3 different clusters contributes
+   *      one coarse triangle connecting those 3 cluster seeds.  Deduplication yields a valid,
+   *      non-degenerate topology.
+   *   4. The SAME seed IDs and topology are applied to every mesh in `meshes`, so
+   *      correspondence is maintained.
+   *
+   * This avoids the spike / distortion artifacts produced by Quadric-Error decimation, which
+   * optimises topology for the reference geometry and creates degenerate triangles when that
+   * topology is transplanted to other shapes.
+   */
+  def decimateInCorrespondence(
+      reference: TriangleMesh[_3D],
+      meshes: IndexedSeq[TriangleMesh[_3D]],
+      targetVertices: Int
+  )(implicit rng: Random): IndexedSeq[TriangleMesh[_3D]] = {
+
+    val nOrig = reference.pointSet.numberOfPoints
+
+    // ── 1. Seed selection ─────────────────────────────────────────────────────
+    // Oversample 4× so deduplication still hits the target count.
+    val seeds: Array[Int] = UniformMeshSampler3D(reference, targetVertices * 4)
+      .sample()
+      .map { case (p, _) => reference.pointSet.findClosestPoint(p).id.id }
+      .distinct
+      .take(targetVertices)
+      .toArray
+
+    // ── 2. Build adjacency list ───────────────────────────────────────────────
+    val adj = Array.fill(nOrig)(scala.collection.mutable.ArrayBuffer.empty[Int])
+    reference.triangulation.triangles.foreach { t =>
+      val a = t.ptId1.id; val b = t.ptId2.id; val c = t.ptId3.id
+      adj(a) += b; adj(a) += c
+      adj(b) += a; adj(b) += c
+      adj(c) += a; adj(c) += b
+    }
+
+    // ── 3. Multi-source BFS Voronoi ───────────────────────────────────────────
+    val cluster = Array.fill(nOrig)(-1)
+    seeds.zipWithIndex.foreach { case (s, ci) => cluster(s) = ci }
+    val queue = scala.collection.mutable.Queue.empty[Int]
+    seeds.foreach(queue.enqueue)
+    while (queue.nonEmpty) {
+      val v = queue.dequeue()
+      val ci = cluster(v)
+      adj(v).foreach { nb =>
+        if (cluster(nb) < 0) { cluster(nb) = ci; queue.enqueue(nb) }
+      }
+    }
+
+    // ── 4. Build coarse triangulation ─────────────────────────────────────────
+    // One coarse triangle per original triangle that spans 3 distinct clusters.
+    // Sort the cluster-triple to deduplicate regardless of vertex order.
+    val seen  = scala.collection.mutable.LinkedHashMap.empty[String, (Int, Int, Int)]
+    reference.triangulation.triangles.foreach { t =>
+      val ca = cluster(t.ptId1.id); val cb = cluster(t.ptId2.id); val cc = cluster(t.ptId3.id)
+      if (ca >= 0 && cb >= 0 && cc >= 0 && ca != cb && ca != cc && cb != cc) {
+        val s = Seq(ca, cb, cc).sorted
+        val key = s"${s(0)},${s(1)},${s(2)}"
+        if (!seen.contains(key)) seen(key) = (ca, cb, cc)
+      }
+    }
+
+    // ── 5. Compact cluster IDs → contiguous 0..K-1 ───────────────────────────
+    val usedClusters = seen.values.flatMap(t => Seq(t._1, t._2, t._3))
+      .toIndexedSeq.distinct.sorted
+    val toNew    = usedClusters.zipWithIndex.toMap
+    val topology = TriangleList(seen.values.toIndexedSeq.map { case (a, b, c) =>
+      TriangleCell(PointId(toNew(a)), PointId(toNew(b)), PointId(toNew(c)))
+    })
+    val repIds = usedClusters.map(ci => PointId(seeds(ci)))
+    println(s"    Voronoi coarsening: ${repIds.length} vertices, ${topology.triangles.length} triangles")
+
+    // ── 6. Apply to all meshes using original vertex positions ────────────────
+    meshes.map(m => TriangleMesh3D(repIds.map(id => m.pointSet.point(id)), topology))
+  }
 }
 
 /** Surface-distance measures. Kept separate from MeshMetrics so the directionality is explicit. */
