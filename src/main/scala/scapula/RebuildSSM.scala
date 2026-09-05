@@ -142,6 +142,9 @@ object RebuildSSM {
 
       val (rigidMesh, rigidLms) = RigidAlign.landmarkThenIcp(p.mesh, p.lms, refMesh, refLms)
 
+      // Save rigid-aligned mesh so ViewSSM can show the intermediate step
+      MeshIO.writeMesh(rigidMesh, new File(passDir, s"rigid_${p.modelId}.stl")).toOption
+
       print(s"  gp-icp (${Config.icpIterations} iter) ...")
 
       val registered = gpIcp(gpModel, rigidMesh)
