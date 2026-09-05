@@ -63,10 +63,11 @@ object Config {
 
   /**
    * 0-based index into the sorted specimen list to use as the initial reference for pass 1.
-   * Default 1 = second specimen (paired_scapula_002). Override with SCAPULA_REF_IDX.
-   * For a female starting reference, set to the index of the first female specimen (~3).
+   * Default 12 = a mid-dataset left-side specimen (avoids mirroring bias from right-side #001).
+   * Override with SCAPULA_REF_IDX=<n> to choose any specimen.
+   * Tip: pick a left-side specimen near the middle of the dataset for least reference bias.
    */
-  val refIdx: Int = env("SCAPULA_REF_IDX", "1").toInt
+  val refIdx: Int = env("SCAPULA_REF_IDX", "12").toInt
 
   val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
 
