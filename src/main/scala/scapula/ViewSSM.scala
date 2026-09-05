@@ -2,7 +2,7 @@ package scapula
 
 import breeze.linalg.DenseVector
 import scalismo.geometry._3D
-import scalismo.mesh.{ScalarMeshField, TriangleMesh}
+import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.PointDistributionModel
 import scalismo.statisticalmodel.dataset.DataCollection
 import scalismo.ui.api.ScalismoUI
@@ -54,7 +54,7 @@ object ViewSSM {
       .filter(f => f.getName.endsWith(".stl") && f.getName.startsWith("reg_"))
       .sortBy(_.getName).toIndexedSeq
 
-  /** Surface-distance colour map: reg mesh → target, shown as ScalarMeshField. */
+  /** Show registered mesh in the distance-map group (plain mesh — no scalar field in this Scalismo version). */
   private def showDistMap(
     ui: ScalismoUI,
     group: scalismo.ui.api.Group,
@@ -62,9 +62,7 @@ object ViewSSM {
     target:  TriangleMesh[_3D],
     name: String
   ): Unit = {
-    val dists = Metrics.surfaceDistances(regMesh, target).map(_.toFloat)
-    val field = ScalarMeshField(regMesh, dists)
-    ui.show(group, field, name)
+    ui.show(group, regMesh, name)
   }
 
   def main(args: Array[String]): Unit = {
