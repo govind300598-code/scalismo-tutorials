@@ -66,11 +66,10 @@ object Main {
     println(s"\n[DECIMATION] Generating ~${Config.modelResolution}-vertex working meshes → ${preDir.getPath}")
     Decimation.generateAll(validSpecimens, preDir, targetN = Config.modelResolution)
 
-    // ── 3. Pick initial reference (first left scapula with landmarks) ─────────
-    val initialRefSpec = validSpecimens.find(!_.isRight).getOrElse(
-      throw new RuntimeException("No left scapula found in the dataset")
-    )
-    println(s"\n[REFERENCE] Initial reference: ${initialRefSpec.modelId}")
+    // ── 3. Pick initial reference (Config.refIdx into sorted specimen list) ──────
+    val clampedIdx    = Config.refIdx.min(validSpecimens.length - 1)
+    val initialRefSpec = validSpecimens(clampedIdx)
+    println(s"\n[REFERENCE] Initial reference (index $clampedIdx): ${initialRefSpec.modelId}")
     val initialRef  = ScapulaData.loadMesh(initialRefSpec.file)
     val initialRefL = landmarks(initialRefSpec.modelId)
 

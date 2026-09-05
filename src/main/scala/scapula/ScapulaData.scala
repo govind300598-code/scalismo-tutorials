@@ -44,6 +44,10 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "false").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  // 0-based index into the sorted valid-specimen list to use as the initial reference.
+  // Default 2 = paired_scapula_002_M_56_L (third specimen when sorted alphabetically).
+  val refIdx: Int = env("SCAPULA_REF_IDX", "2").toInt
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
