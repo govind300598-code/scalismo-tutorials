@@ -36,14 +36,15 @@ object VisualizationApp {
     }
 
     val ui = ScalismoUI("Scapula SSM — Full Pipeline Viewer")
+    Thread.sleep(1000) // let VTK finish initialising its renderer before any show()
 
     // ── S00: Raw input (unaligned) ────────────────────────────────────────────
     val s00 = ui.createGroup("S00_RawInput (unaligned — deliberately scattered)")
-    specimens.foreach(s => ui.show(s00, s.mesh, s.id))
+    specimens.foreach { s => ui.show(s00, s.mesh, s.id); Thread.sleep(30) }
 
     // ── S01: Landmark positions ───────────────────────────────────────────────
     val s01 = ui.createGroup("S01_Landmarks (GC/TS/IA/PLA/AC on every specimen)")
-    specimens.foreach(s => ui.show(s01, s.lms.toList, s.id))
+    specimens.foreach { s => ui.show(s01, s.lms.toList, s.id); Thread.sleep(30) }
 
     // ── S02: Reference specimen ───────────────────────────────────────────────
     val ref = specimens.head
