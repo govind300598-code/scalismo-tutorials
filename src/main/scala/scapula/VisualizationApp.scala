@@ -137,13 +137,13 @@ object VisualizationApp {
     val ssmName = s"ssm_pass${Config.refinePasses}"
     val ssm: PointDistributionModel[_3D, TriangleMesh] = SSMBuilder.loadSSM(ssmName).getOrElse {
       println(s"[info] Building SSM from ${nonRigidMeshes.length} pass-${Config.refinePasses} meshes (no .h5 found)...")
-      val m = SSMBuilder.buildSSM(nonRigidMeshes)
+      val m = SSMBuilder.buildSSM(currentRef, nonRigidMeshes)
       SSMBuilder.saveSSM(m, ssmName)
       m
     }
     println(s"[info] SSM: rank=${ssm.rank}")
 
-    val eigenValues = ssm.gp.klBasis.map(_.eigenValue)
+    val eigenValues: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue)
     val totalVar    = eigenValues.sum
     val nPrint      = math.min(10, ssm.rank)
     println("[info]  Mode   Var%   Cumul%    σ mm")

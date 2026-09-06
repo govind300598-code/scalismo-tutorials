@@ -1,17 +1,36 @@
 package scapula
 
-import scalismo.geometry._3D
+import scalismo.common.DiscreteField
+import scalismo.geometry.{EuclideanVector, _3D}
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
 import scalismo.statisticalmodel.PointDistributionModel
+import scalismo.statisticalmodel.dataset.DataCollection
 
 import java.io.File
 
 object SSMBuilder {
 
-  def buildSSM(meshes: IndexedSeq[TriangleMesh[_3D]]): PointDistributionModel[_3D, TriangleMesh] = {
+  /**
+   * Build a PCA-based SSM from meshes that are already in correspondence with `reference`.
+   * The DataCollection is built by computing the deformation from each registered mesh
+   * back to the reference, then running PCA on those deformation fields.
+   */
+  def buildSSM(
+    reference: TriangleMesh[_3D],
+    meshes: IndexedSeq[TriangleMesh[_3D]]
+  ): PointDistributionModel[_3D, TriangleMesh] = {
     require(meshes.nonEmpty, "No registered meshes to build SSM from")
-    PointDistributionModel.createUsingPCA(meshes)
+
+    val defFields = meshes.map { mesh =>
+      val defs = reference.pointSet.pointsWithId.map { case (refPt, id) =>
+        mesh.pointSet.point(id) - refPt
+      }.toIndexedSeq
+      DiscreteField[_3D, TriangleMesh, EuclideanVector[_3D]](reference, defs)
+    }
+
+    val dc = DataCollection[_3D, TriangleMesh, EuclideanVector[_3D]](reference, defFields)
+    PointDistributionModel.createUsingPCA(dc)
   }
 
   // ── Caching helpers ──────────────────────────────────────────────────────────
@@ -30,7 +49,7 @@ object SSMBuilder {
   def loadMeshes(tag: String): Option[IndexedSeq[TriangleMesh[_3D]]] = {
     val dir = cacheDir(tag)
     if (!dir.exists()) return None
-    val files = Option(dir.listFiles()).getOrElse(Array.empty)
+    val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
       .filter(_.getName.endsWith(".vtk"))
       .sortBy(_.getName)
     if (files.isEmpty) return None
@@ -40,8 +59,7 @@ object SSMBuilder {
 
   def saveSSM(model: PointDistributionModel[_3D, TriangleMesh], name: String): Unit = {
     Config.outDir.mkdirs()
-    val f = new File(Config.outDir, s"$name.h5")
-    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(model, f)
+    StatisticalModelIO.writeStatisticalTriangleMeshModel3D(model, new File(Config.outDir, s"$name.h5"))
       .recover { case e => println(s"[warn] Could not save SSM: ${e.getMessage}") }
   }
 
