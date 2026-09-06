@@ -1,77 +1,73 @@
 package scapula
 
-import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.common.{Field, RealSpace}
 import scalismo.geometry.{EuclideanVector, Point, _3D}
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
-import scalismo.mesh.TriangleMesh
+import scalismo.mesh.{TriangleMesh, TriangleMesh3D}
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
 import scalismo.utils.Random
+import scalismo.common.PointId
 
 object NonRigidReg {
 
   /**
-   * Build a single-Gaussian GP kernel on the given reference mesh, then return a PointDistributionModel whose
-   * reference is the DECIMATED mesh. The Nystrom quadrature uses the original (higher-res) reference for accuracy,
-   * and a NearestNeighborInterpolator evaluates the continuous GP at the decimated mesh's vertices.
+   * GP-ICP non-rigid registration.
    *
-   * Kernel: k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃
+   * Kernel (single Gaussian, diagonal):
+   *   k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃
+   *
+   * Each iteration:
+   *  1. For every vertex of the current mesh, find closest surface point on target.
+   *  2. Treat those as noisy observations and update the GP posterior.
+   *  3. The posterior mean becomes the next mesh estimate.
+   *
+   * @param reference decimated reference mesh (SSM lives at this resolution)
+   * @param target    rigidly-aligned target specimen
    */
-  private def buildModel(
-    originalRef: TriangleMesh[_3D],
-    decimatedRef: TriangleMesh[_3D]
-  )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
+  def register(
+    reference: TriangleMesh[_3D],
+    target: TriangleMesh[_3D]
+  )(implicit rng: Random): TriangleMesh[_3D] = {
+
+    // ── Build kernel and GP ───────────────────────────────────────────────────
     val scalarKernel = GaussianKernel[_3D](Config.gpSigma) * Config.gpScale
     val kernel       = DiagonalKernel(scalarKernel, 3)
     val zeroMean     = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val gp           = GaussianProcess(zeroMean, kernel)
 
-    // Nystrom approximation using the denser original mesh as quadrature domain.
-    // The resulting LowRankGaussianProcess is continuous and can be evaluated anywhere.
+    // Low-rank Nystrom approximation anchored at the reference mesh's vertices.
     val lowRankGP = LowRankGaussianProcess.approximateGPNystrom(
       gp,
-      originalRef.pointSet,
+      reference.pointSet,
       numBasisFunctions = Config.gpBasis
     )
 
-    // Evaluate (via NN interpolation) at the decimated mesh's vertices to get the PDM.
-    PointDistributionModel[_3D, TriangleMesh](decimatedRef, lowRankGP)
-  }
-
-  /**
-   * GP-ICP: iteratively find closest-point correspondences between the current model instance and the target,
-   * then update the model via GP posterior. Returns a mesh with the same topology as `decimatedRef`.
-   *
-   * @param originalRef    full-resolution reference (used for Nystrom quadrature only)
-   * @param decimatedRef   decimated reference (the SSM lives at this resolution)
-   * @param target         rigidly-aligned target specimen
-   */
-  def register(
-    originalRef: TriangleMesh[_3D],
-    decimatedRef: TriangleMesh[_3D],
-    target: TriangleMesh[_3D]
-  )(implicit rng: Random): TriangleMesh[_3D] = {
-    val model     = buildModel(originalRef, decimatedRef)
+    val model     = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
     val targetOps = target.operations
-    var current   = decimatedRef
+    var current   = reference
 
+    // ── GP-ICP iterations ─────────────────────────────────────────────────────
     for (_ <- 0 until Config.gpIcpIter) {
       val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
         (id, targetOps.closestPointOnSurface(pt).point)
       }.toIndexedSeq
       current = model.posterior(correspondences, Config.gpNoise).mean
     }
+
     current
   }
 
-  /** Pointwise mean of a set of meshes that are already in correspondence (same topology). */
+  /** Pointwise mean of meshes already in correspondence (same topology). */
   def meanMesh(meshes: IndexedSeq[TriangleMesh[_3D]]): TriangleMesh[_3D] = {
     require(meshes.nonEmpty)
-    val n     = meshes.length
-    val pts   = (0 until meshes.head.pointSet.numberOfPoints).map { i =>
-      val sum = meshes.foldLeft(EuclideanVector.zeros[_3D])((acc, m) => acc + m.pointSet.point(scalismo.common.PointId(i)).toVector)
+    val n   = meshes.length
+    val pts = (0 until meshes.head.pointSet.numberOfPoints).map { i =>
+      val id  = PointId(i)
+      val sum = meshes.foldLeft(EuclideanVector.zeros[_3D]) { (acc, m) =>
+        acc + m.pointSet.point(id).toVector
+      }
       (sum * (1.0 / n)).toPoint
     }
-    scalismo.mesh.TriangleMesh3D(pts, meshes.head.triangulation)
+    TriangleMesh3D(pts, meshes.head.triangulation)
   }
 }

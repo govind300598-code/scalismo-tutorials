@@ -33,8 +33,9 @@ object Config {
   val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
   // ── GP kernel (single Gaussian): k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃ ──
-  /** Length scale of the Gaussian kernel (mm). Controls spatial reach of deformations. */
-  val gpSigma: Double = env("SCAPULA_GP_SIGMA", "130.0").toDouble
+  /** Length scale of the Gaussian kernel (mm). Controls spatial reach of deformations.
+   *  13mm ≈ local support; well below the ~150mm scapula so modes are anatomically local. */
+  val gpSigma: Double = env("SCAPULA_GP_SIGMA", "13.0").toDouble
 
   /** Amplitude / scale factor of the Gaussian kernel. */
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
