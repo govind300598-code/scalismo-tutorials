@@ -23,17 +23,30 @@ object Config {
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
-  /** Non-rigid (GP) ICP iterations per pass. */
+  /** Rigid ICP iterations (landmark Procrustes + trimmed ICP). */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
 
   /**
-   * Number of registration passes. Pass 1 registers to an arbitrary specimen; each further pass rebuilds the reference
-   * as the mean of the previous pass and re-registers. This removes reference bias.
+   * Number of non-rigid registration passes. Pass 1 registers to the initial reference; each further pass rebuilds the
+   * reference as the mean of the previous pass and re-registers. This removes reference bias.
    */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
-  /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
-  val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble
+  // ── GP kernel (single Gaussian): k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃ ──
+  /** Length scale of the Gaussian kernel (mm). Controls spatial reach of deformations. */
+  val gpSigma: Double = env("SCAPULA_GP_SIGMA", "130.0").toDouble
+
+  /** Amplitude / scale factor of the Gaussian kernel. */
+  val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
+
+  /** Number of Nystrom basis functions for the low-rank GP approximation. */
+  val gpBasis: Int = env("SCAPULA_GP_BASIS", "100").toInt
+
+  /** GP-ICP iterations per non-rigid registration pass. */
+  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "10").toInt
+
+  /** Observation noise variance in the GP posterior update step. */
+  val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
 
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
