@@ -78,11 +78,14 @@ object VisualizationApp {
       if (!f.exists()) None
       else scalismo.io.StatisticalModelIO.readStatisticalMeshModel(f).toOption
 
-    // Use decimated 8k mesh if available, otherwise full-res
+    // Use decimated 8k mesh if available, otherwise full-res.
+    // keepLargestComponent removes isolated triangles produced by stride-based
+    // decimation, which otherwise appear as floating fragments in the viewer.
     def loadWorkingMesh(s: ScapulaData.Specimen): TriangleMesh[_3D] = {
       val dec8k = new File(preDir, s.modelId + ".stl")
-      val mesh  = if (dec8k.exists()) ScapulaData.loadMesh(dec8k)
+      val raw   = if (dec8k.exists()) ScapulaData.loadMesh(dec8k)
                   else ScapulaData.loadMesh(s.file)
+      val mesh  = Decimation.keepLargestComponent(raw)
       if (s.isRight) ScapulaData.mirrorMesh(mesh) else mesh
     }
 
@@ -117,6 +120,7 @@ object VisualizationApp {
       g01Count += 1
     }
     println(s"  $g01Count specimens loaded  (ref: ${refSpec.modelId})")
+    println("  → Press the ↺ (reset-camera) button in the 3D toolbar to fit all bones in view")
     println(f"  G01 bounding box: X=[${g01minX}%.0f, ${g01maxX}%.0f] " +
             f"Y=[${g01minY}%.0f, ${g01maxY}%.0f] Z=[${g01minZ}%.0f, ${g01maxZ}%.0f]")
     val g01extX = g01maxX - g01minX; val g01extY = g01maxY - g01minY; val g01extZ = g01maxZ - g01minZ

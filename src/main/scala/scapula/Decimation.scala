@@ -55,6 +55,48 @@ object Decimation {
   }
 
   /**
+   * Keep only the largest connected component of `mesh`.
+   *
+   * Stride-based decimation can produce isolated triangles disconnected from the
+   * main bone body.  This removes them by running union-find over triangle edges
+   * and discarding all components smaller than the largest one.
+   */
+  def keepLargestComponent(mesh: TriangleMesh[_3D]): TriangleMesh[_3D] = {
+    val n = mesh.pointSet.numberOfPoints
+    val parent = Array.tabulate(n)(identity)
+
+    def find(x: Int): Int = {
+      if (parent(x) != x) parent(x) = find(parent(x))
+      parent(x)
+    }
+    def union(a: Int, b: Int): Unit = parent(find(a)) = find(b)
+
+    mesh.triangulation.triangles.foreach { t =>
+      union(t.ptId1.id, t.ptId2.id)
+      union(t.ptId2.id, t.ptId3.id)
+    }
+
+    val compSize = Array.fill(n)(0)
+    (0 until n).foreach(i => compSize(find(i)) += 1)
+    val largestRoot = (0 until n).maxBy(i => compSize(find(i)))
+    val largestComp = find(largestRoot)
+
+    if (compSize(largestComp) == n) return mesh
+
+    val remap = Array.fill(n)(-1)
+    var idx = 0
+    (0 until n).foreach { i =>
+      if (find(i) == largestComp) { remap(i) = idx; idx += 1 }
+    }
+
+    val newPts  = (0 until n).filter(i => remap(i) >= 0).map(i => mesh.pointSet.point(PointId(i))).toIndexedSeq
+    val newTris = mesh.triangulation.triangles
+      .filter(t => remap(t.ptId1.id) >= 0 && remap(t.ptId2.id) >= 0 && remap(t.ptId3.id) >= 0)
+      .map(t => TriangleCell(PointId(remap(t.ptId1.id)), PointId(remap(t.ptId2.id)), PointId(remap(t.ptId3.id))))
+    TriangleMesh3D(newPts, TriangleList(newTris))
+  }
+
+  /**
    * Generate 8k working meshes for all specimens into `outDir`.
    *
    * Idempotent: if a file already exists it is loaded rather than regenerated.
@@ -71,7 +113,7 @@ object Decimation {
       if (!outFile.exists()) {
         println(s"  Decimating ${spec.modelId}")
         val original  = ScapulaData.loadMesh(spec.file)
-        val decimated = decimateByStride(original, targetN)
+        val decimated = keepLargestComponent(decimateByStride(original, targetN))
         MeshIO.writeMesh(decimated, outFile)
           .getOrElse(throw new RuntimeException(s"Failed to write ${outFile.getPath}"))
         println(f"    ${spec.modelId}: ${original.pointSet.numberOfPoints} → ${decimated.pointSet.numberOfPoints} vertices")
