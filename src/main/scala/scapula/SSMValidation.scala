@@ -47,7 +47,7 @@ object SSMValidation {
     // Old layout: outDir/pass{n}/reg_*.stl  (RebuildSSM output)
     def stlsIn(dir: File, prefix: String = ""): IndexedSeq[File] =
       if (!dir.isDirectory) IndexedSeq.empty
-      else Option(dir.listFiles()).getOrElse(Array.empty)
+      else Option(dir.listFiles()).getOrElse(Array.empty[File])
         .filter(f => f.getName.endsWith(".stl") && f.getName.startsWith(prefix))
         .sorted.toIndexedSeq
 
