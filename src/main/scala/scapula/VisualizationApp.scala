@@ -99,15 +99,31 @@ object VisualizationApp {
     println("\n[G01] Landmark-only Procrustes alignment (computed live)")
     val g01 = ui.createGroup("G01_LandmarkAligned (Procrustes only — should overlap roughly)")
     var g01Count = 0
+    var g01minX = Double.MaxValue; var g01maxX = Double.MinValue
+    var g01minY = Double.MaxValue; var g01maxY = Double.MinValue
+    var g01minZ = Double.MaxValue; var g01maxZ = Double.MinValue
     validSpecs.foreach { s =>
-      val mesh  = loadWorkingMesh(s)
-      val lms   = specimenLms(s)
-      val trans = ScapulaData.rigidFromLandmarks(lms, refLms)
-      val v01   = ui.show(g01, mesh.transform(trans), s.modelId)
+      val mesh    = loadWorkingMesh(s)
+      val lms     = specimenLms(s)
+      val trans   = ScapulaData.rigidFromLandmarks(lms, refLms)
+      val aligned = mesh.transform(trans)
+      aligned.pointSet.points.foreach { p =>
+        if (p.x < g01minX) g01minX = p.x; if (p.x > g01maxX) g01maxX = p.x
+        if (p.y < g01minY) g01minY = p.y; if (p.y > g01maxY) g01maxY = p.y
+        if (p.z < g01minZ) g01minZ = p.z; if (p.z > g01maxZ) g01maxZ = p.z
+      }
+      val v01 = ui.show(g01, aligned, s.modelId)
       v01.opacity = 0.4
       g01Count += 1
     }
     println(s"  $g01Count specimens loaded  (ref: ${refSpec.modelId})")
+    println(f"  G01 bounding box: X=[${g01minX}%.0f, ${g01maxX}%.0f] " +
+            f"Y=[${g01minY}%.0f, ${g01maxY}%.0f] Z=[${g01minZ}%.0f, ${g01maxZ}%.0f]")
+    val g01extX = g01maxX - g01minX; val g01extY = g01maxY - g01minY; val g01extZ = g01maxZ - g01minZ
+    if (g01extX < 300 && g01extY < 300 && g01extZ < 300)
+      println(s"  ✓ Bounding box is bone-scale (~150mm) — alignment looks correct")
+    else
+      println(s"  ✗ Bounding box is HUGE — landmarks may be wrong or CSV columns misread!")
     println("  Bones should be ROUGHLY overlapping — if scattered, landmarks are wrong")
 
     // ════════════════════════════════════════════════════════════════════════
@@ -264,43 +280,25 @@ object VisualizationApp {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // G11 — Landmarks (raw space) — loaded late so it doesn't appear first
+    // G11 — Reference mesh + landmarks (reference space — camera-safe)
     // ════════════════════════════════════════════════════════════════════════
-    println("\n[G11] Landmarks on all specimens")
-    val g11 = ui.createGroup("G11_Landmarks (GC/TS/IA/PLA/AC on every specimen, raw space)")
-    validSpecs.foreach { s => ui.show(g11, specimenLms(s), s"LM_${s.modelId}") }
-    println(s"  ${validSpecs.length} landmark sets (raw world space, not aligned)")
-
-    // ════════════════════════════════════════════════════════════════════════
-    // G12 — Reference mesh + landmarks
-    // ════════════════════════════════════════════════════════════════════════
-    println(s"\n[G12] Reference: ${refSpec.modelId}")
-    val g12     = ui.createGroup(s"G12_Reference (${refSpec.modelId})")
+    println(s"\n[G11] Reference: ${refSpec.modelId}")
+    val g11     = ui.createGroup(s"G11_Reference (${refSpec.modelId})")
     val refMesh = loadWorkingMesh(refSpec)
-    ui.show(g12, refMesh, "REF_mesh")
-    ui.show(g12, refLms,  "REF_landmarks")
+    ui.show(g11, refMesh, "REF_mesh")
+    ui.show(g11, refLms,  "REF_landmarks")
     println(f"  ${refMesh.pointSet.numberOfPoints} vertices")
     refLms.foreach { lm =>
       println(f"  ${lm.id}%6s  (${lm.point.x}%.1f, ${lm.point.y}%.1f, ${lm.point.z}%.1f)")
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // G13 — Raw input (LAST — always scattered, use decimated meshes)
-    // ════════════════════════════════════════════════════════════════════════
-    println(s"\n[G13] Raw unaligned input (LAST group — always scattered)")
-    val g13 = ui.createGroup("G13_RawInput (UNALIGNED — always scattered, scroll past this)")
-    allSpecs.foreach { s =>
-      // Use 8k decimated mesh if available to keep rendering clean
-      val dec = new File(preDir, s.modelId + ".stl")
-      val mesh = if (dec.exists()) ScapulaData.loadMesh(dec)
-                 else ScapulaData.loadMesh(s.file)
-      val finalMesh = if (s.isRight) ScapulaData.mirrorMesh(mesh) else mesh
-      ui.show(g13, finalMesh, s.modelId + (if (s.isRight) "_mirrored" else ""))
-    }
-    println(s"  ${allSpecs.length} raw meshes (${if (preDir.isDirectory) "8k decimated" else "full-res"})")
-
-    // ════════════════════════════════════════════════════════════════════════
     // Guide
+    // NOTE: Raw-input and raw-space landmark groups are intentionally omitted.
+    // Those groups are in original scanner coordinates (spanning ~1200 mm),
+    // which forces the ScalismoUI camera to zoom out so far that all aligned
+    // bones appear as tiny triangle fragments.  View raw STL files separately
+    // in Scalismo UI or Paraview if needed.
     // ════════════════════════════════════════════════════════════════════════
     println("\n" + "═" * 72)
     println("  VIEWER GUIDE — groups listed in inspection order")
@@ -313,9 +311,8 @@ object VisualizationApp {
     println("  G06_SSM_Interactive  → select group → drag Mode sliders on right")
     println("  G07/G08/G09_Mode1-3  → ±1σ/±2σ/±3σ static shapes")
     println("  G10_ModelSamples     → 5 random instances")
-    println("  G11_Landmarks        → raw space landmark positions")
-    println("  G12_Reference        → reference mesh + landmarks")
-    println("  G13_RawInput         → RAW UNALIGNED — always scattered (expected)")
+    println("  G11_Reference        → reference mesh + landmarks (in reference space)")
+    println("  NOTE: Raw-input groups omitted — they span ~1200mm and distort camera.")
     println("═" * 72)
   }
 }
