@@ -268,32 +268,47 @@ object VisualizationApp {
           def coeff(alpha: Double): DenseVector[Double] =
             DenseVector(Array.tabulate(ssm.rank)(j => if (j == modeIdx) alpha * sigma else 0.0))
 
-          ui.show(mGrp, meanMesh,                 s"Mode${modeIdx+1}_mean")
-          ui.show(mGrp, ssm.instance(coeff( 1.0)), s"Mode${modeIdx+1}_+1sigma")
-          ui.show(mGrp, ssm.instance(coeff(-1.0)), s"Mode${modeIdx+1}_-1sigma")
-          ui.show(mGrp, ssm.instance(coeff( 2.0)), s"Mode${modeIdx+1}_+2sigma")
-          ui.show(mGrp, ssm.instance(coeff(-2.0)), s"Mode${modeIdx+1}_-2sigma")
-          ui.show(mGrp, ssm.instance(coeff( 3.0)), s"Mode${modeIdx+1}_+3sigma")
-          ui.show(mGrp, ssm.instance(coeff(-3.0)), s"Mode${modeIdx+1}_-3sigma")
+          ui.show(mGrp, meanMesh,                  s"Mode${modeIdx+1}_mean"    ).opacity = 0.9
+          ui.show(mGrp, ssm.instance(coeff( 1.0)), s"Mode${modeIdx+1}_+1sigma" ).opacity = 0.5
+          ui.show(mGrp, ssm.instance(coeff(-1.0)), s"Mode${modeIdx+1}_-1sigma" ).opacity = 0.5
+          ui.show(mGrp, ssm.instance(coeff( 2.0)), s"Mode${modeIdx+1}_+2sigma" ).opacity = 0.4
+          ui.show(mGrp, ssm.instance(coeff(-2.0)), s"Mode${modeIdx+1}_-2sigma" ).opacity = 0.4
+          ui.show(mGrp, ssm.instance(coeff( 3.0)), s"Mode${modeIdx+1}_+3sigma" ).opacity = 0.3
+          ui.show(mGrp, ssm.instance(coeff(-3.0)), s"Mode${modeIdx+1}_-3sigma" ).opacity = 0.3
         }
 
         // G10 — Random samples
         println("\n[G10] 5 random SSM instances")
         val g10 = ui.createGroup("G10_ModelSamples (5 random instances)")
-        (1 to 5).foreach { i => ui.show(g10, ssm.sample(), s"Sample_$i") }
+        (1 to 5).foreach { i => ui.show(g10, ssm.sample(), s"Sample_$i").opacity = 0.4 }
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // G11 — Reference mesh + landmarks (reference space — camera-safe)
+    // G11 — SSM mean mesh (in SSM coordinate space — same as G06-G10)
+    //        If no SSM is available, falls back to reference mesh.
+    //
+    // IMPORTANT: The original reference mesh (refSpec) is in SCANNER space,
+    // which differs from SSM space after 4 iterations.  Showing it alongside
+    // SSM groups forces ScalismoUI to zoom out to encompass both coordinate
+    // frames, making all aligned bones appear as tiny fragments.  We therefore
+    // always show the SSM mean (or the last-pass registration mean) here.
     // ════════════════════════════════════════════════════════════════════════
-    println(s"\n[G11] Reference: ${refSpec.modelId}")
-    val g11     = ui.createGroup(s"G11_Reference (${refSpec.modelId})")
-    val refMesh = loadWorkingMesh(refSpec)
-    ui.show(g11, refMesh, "REF_mesh")
-    ui.show(g11, refLms,  "REF_landmarks")
-    println(f"  ${refMesh.pointSet.numberOfPoints} vertices")
-    refLms.foreach { lm =>
-      println(f"  ${lm.id}%6s  (${lm.point.x}%.1f, ${lm.point.y}%.1f, ${lm.point.z}%.1f)")
+    println(s"\n[G11] SSM Mean / Reference")
+    val g11 = ui.createGroup("G11_SSMMean (mean shape in SSM coordinate space)")
+    ssmOpt match {
+      case Some(ssm) =>
+        val meanMeshG11 = ssm.mean
+        ui.show(g11, meanMeshG11, "SSM_mean")
+        println(f"  SSM mean shown (${meanMeshG11.pointSet.numberOfPoints} vertices, same space as G06-G10)")
+      case None =>
+        // Fallback: show reference in its own space (may shift camera if SSM groups absent)
+        val refMeshFallback = loadWorkingMesh(refSpec)
+        ui.show(g11, refMeshFallback, "REF_mesh")
+        ui.show(g11, refLms,          "REF_landmarks")
+        println(f"  Reference mesh shown (no SSM available): ${refMeshFallback.pointSet.numberOfPoints} vertices")
+        refLms.foreach { lm =>
+          println(f"  ${lm.id}%6s  (${lm.point.x}%.1f, ${lm.point.y}%.1f, ${lm.point.z}%.1f)")
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -315,7 +330,7 @@ object VisualizationApp {
     println("  G06_SSM_Interactive  → select group → drag Mode sliders on right")
     println("  G07/G08/G09_Mode1-3  → ±1σ/±2σ/±3σ static shapes")
     println("  G10_ModelSamples     → 5 random instances")
-    println("  G11_Reference        → reference mesh + landmarks (in reference space)")
+    println("  G11_SSMMean          → SSM mean mesh (same coordinate space as G06-G10)")
     println("  NOTE: Raw-input groups omitted — they span ~1200mm and distort camera.")
     println("═" * 72)
   }
