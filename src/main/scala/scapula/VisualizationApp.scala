@@ -69,7 +69,7 @@ object VisualizationApp {
     // ── Helpers ──────────────────────────────────────────────────────────────
     def stlsIn(dir: File): IndexedSeq[File] =
       if (!dir.isDirectory) IndexedSeq.empty
-      else Option(dir.listFiles()).getOrElse(Array.empty)
+      else Option(dir.listFiles()).getOrElse(Array.empty[File])
         .filter(_.getName.endsWith(".stl"))
         .sortBy(_.getName).toIndexedSeq
 
