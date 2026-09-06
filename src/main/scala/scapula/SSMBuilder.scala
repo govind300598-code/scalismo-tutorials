@@ -29,7 +29,7 @@ object SSMBuilder {
       DiscreteField[_3D, TriangleMesh, EuclideanVector[_3D]](reference, defs)
     }
 
-    val dc = DataCollection[_3D, TriangleMesh, EuclideanVector[_3D]](reference, defFields)
+    val dc: DataCollection[_3D, TriangleMesh, EuclideanVector[_3D]] = defFields
     PointDistributionModel.createUsingPCA(dc)
   }
 

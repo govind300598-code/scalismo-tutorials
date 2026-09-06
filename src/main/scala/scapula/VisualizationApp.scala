@@ -143,7 +143,7 @@ object VisualizationApp {
     }
     println(s"[info] SSM: rank=${ssm.rank}")
 
-    val eigenValues: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue)
+    val eigenValues: Seq[Double] = ssm.gp.klBasis.map(_.eigenvalue)
     val totalVar    = eigenValues.sum
     val nPrint      = math.min(10, ssm.rank)
     println("[info]  Mode   Var%   Cumul%    σ mm")
