@@ -103,7 +103,8 @@ object VisualizationApp {
       val mesh  = loadWorkingMesh(s)
       val lms   = specimenLms(s)
       val trans = ScapulaData.rigidFromLandmarks(lms, refLms)
-      ui.show(g01, mesh.transform(trans), s.modelId)
+      val v01   = ui.show(g01, mesh.transform(trans), s.modelId)
+      v01.opacity = 0.4
       g01Count += 1
     }
     println(s"  $g01Count specimens loaded  (ref: ${refSpec.modelId})")
@@ -124,7 +125,8 @@ object VisualizationApp {
       val g02 = ui.createGroup(s"G02_RigidAligned (${rigidFiles.length} specimens — ALL must overlap)")
       rigidFiles.foreach { f =>
         val name = f.getName.stripSuffix(".stl").stripPrefix("rigid_")
-        ui.show(g02, ScapulaData.loadMesh(f), name)
+        val v02  = ui.show(g02, ScapulaData.loadMesh(f), name)
+        v02.opacity = 0.4
       }
       println(s"  ${rigidFiles.length} rigid-aligned meshes")
       println("  Bones MUST overlap here — if not, ICP failed or landmarks are wrong")
@@ -142,7 +144,8 @@ object VisualizationApp {
       val g03 = ui.createGroup(s"G03_NonRigid_Pass1 (${nrPass1.length} specimens, GP-ICP reg)")
       nrPass1.foreach { f =>
         val name = f.getName.stripSuffix(".stl").stripPrefix("reg_")
-        ui.show(g03, ScapulaData.loadMesh(f), name)
+        val v03  = ui.show(g03, ScapulaData.loadMesh(f), name)
+        v03.opacity = 0.4
       }
     }
 
@@ -167,7 +170,8 @@ object VisualizationApp {
       val g04 = ui.createGroup(s"G04_NonRigid_Pass$n (${lastPassFiles.length} specimens — FINAL GP-ICP)")
       lastPassFiles.foreach { f =>
         val name = f.getName.stripSuffix(".stl").stripPrefix("reg_")
-        ui.show(g04, ScapulaData.loadMesh(f), name)
+        val v04  = ui.show(g04, ScapulaData.loadMesh(f), name)
+        v04.opacity = 0.4
       }
       if (rigidFiles.nonEmpty) {
         val d = Metrics.symmetric(ScapulaData.loadMesh(rigidFiles.head), ScapulaData.loadMesh(lastPassFiles.head))
