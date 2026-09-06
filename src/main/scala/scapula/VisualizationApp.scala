@@ -13,26 +13,29 @@ import java.io.File
 /**
  * Scapula SSM — Full Pipeline Viewer
  *
- * Groups are loaded in the order that makes sense for inspection:
- * aligned/registered results FIRST, raw input LAST.
+ * Shows every stage of the pipeline in a single Scalismo UI window.
+ * All groups are in the REFERENCE coordinate space so the camera stays
+ * at bone scale (~150 mm) throughout.
  *
- * Scene panel groups (hide/show with the eye icon):
+ *   G01  Decimated_Aligned      8k meshes, live landmark-Procrustes
+ *   G02  RigidAligned           landmark + ICP (from pipeline output)
+ *   G03  NonRigidRegistered     GP-ICP, dense correspondence (from pipeline)
+ *   G04  MeanShape              SSM mean mesh
+ *   G05  SSM_Interactive        select group → drag Mode sliders (right panel)
+ *   G06  Mode1 (σ, var%)        ±1σ / ±2σ / ±3σ static shapes for mode 1
+ *   G07  Mode2 (σ, var%)        ±1σ / ±2σ / ±3σ static shapes for mode 2
+ *   G08  Mode3 (σ, var%)        ±1σ / ±2σ / ±3σ static shapes for mode 3
+ *   G09  ModelSamples           5 random SSM instances
+ *   G10  Reference              reference mesh + 5 landmarks
  *
- *   G01_LandmarkAligned  – Procrustes (landmark-only, live) — ALWAYS available
- *   G02_RigidAligned     – landmark + ICP (from pipeline output)
- *   G03_NonRigid_Pass1   – GP-ICP pass 1
- *   G04_NonRigid_Final   – GP-ICP final pass (best correspondences)
- *   G05_MeanShapes       – Mean1–4 overlaid, convergence check
- *   G06_SSM_Interactive  – drag Mode sliders to explore shape space
- *   G07_Mode1 / G08_Mode2 / G09_Mode3
- *                        – ±1σ / ±2σ / ±3σ for first 3 modes
- *   G10_ModelSamples     – 5 random SSM instances
- *   G11_Landmarks        – GC/TS/IA/PLA/AC on every specimen (raw space)
- *   G12_Reference        – reference mesh + landmarks
- *   G13_RawInput         – original unaligned meshes (always scattered — LAST)
+ * NOTE: Raw scanner-space meshes are intentionally omitted.
+ *       They span ~1200 mm; showing them forces ScalismoUI's camera to
+ *       zoom out so far that aligned bones appear as tiny fragments.
+ *       View raw STLs in ParaView / MeshLab if needed.
  *
- * Run with:
+ * Run independently:
  *   SCAPULA_DATA_DIR=... SCAPULA_OUT_DIR=... sbt "runMain scapula.VisualizationApp"
+ * Or set SCAPULA_UI=true before running Main.
  */
 object VisualizationApp {
 
@@ -40,35 +43,34 @@ object VisualizationApp {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
-    val dataDir    = Config.dataDir
-    val outDir     = Config.outDir
-    val resultsDir = new File(outDir, "results")
-    val preDir     = new File(outDir, "data/preprocessing/8k")
+    val dataDir  = Config.dataDir
+    val outDir   = Config.outDir
+    val preDir   = new File(outDir, "data/8k")
+    val rigidDir = new File(outDir, "rigid_registered")
+    val nrDir    = new File(outDir, "nonrigid_registered")
+    val modelDir = new File(outDir, "model")
+    val meanDir  = new File(outDir, "mean")
 
-    val useNewLayout = new File(resultsDir, "SSM1").isDirectory
-    println(s"Layout: ${if (useNewLayout) "new (results/SSM{n}/)" else "old (pass{n}/)"}")
-
-    // ── Load landmarks + specimens ──────────────────────────────────────────
-    val csvFile    = ScapulaData.csvFile(dataDir)
+    // ── Load landmarks and specimens ─────────────────────────────────────────
+    val csvFile = ScapulaData.csvFile(dataDir)
     val (lmMap, fromHeader, _) = ScapulaData.readLandmarkCsv(csvFile)
     if (!fromHeader)
-      println("WARNING: landmark columns resolved by fallback offsets, not header names")
+      println("WARNING: landmark columns resolved by fallback offsets — verify CSV header")
 
     val allSpecs   = ScapulaData.specimens(dataDir)
     val validSpecs = allSpecs.filter(s => lmMap.contains(s.modelId))
     println(s"Specimens: ${allSpecs.length} total, ${validSpecs.length} with landmarks")
 
-    // Reference
     val refSpec = validSpecs(Config.refIdx.min(validSpecs.length - 1))
     val refLms  = if (refSpec.isRight) ScapulaData.mirrorLandmarks(lmMap(refSpec.modelId))
                   else lmMap(refSpec.modelId)
     println(s"Reference: ${refSpec.modelId}")
 
-    // ── Helpers ─────────────────────────────────────────────────────────────
-    def stlsIn(dir: File, prefix: String = ""): IndexedSeq[File] =
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    def stlsIn(dir: File): IndexedSeq[File] =
       if (!dir.isDirectory) IndexedSeq.empty
-      else Option(dir.listFiles()).getOrElse(Array.empty[File])
-        .filter(f => f.getName.endsWith(".stl") && f.getName.startsWith(prefix))
+      else Option(dir.listFiles()).getOrElse(Array.empty)
+        .filter(_.getName.endsWith(".stl"))
         .sortBy(_.getName).toIndexedSeq
 
     def loadOpt(f: File): Option[TriangleMesh[_3D]] =
@@ -76,262 +78,237 @@ object VisualizationApp {
 
     def loadModelOpt(f: File): Option[StatisticalMeshModel] =
       if (!f.exists()) None
-      else scalismo.io.StatisticalModelIO.readStatisticalMeshModel(f).toOption
+      else scala.util.Try(
+        scalismo.io.StatisticalModelIO.readStatisticalMeshModel(f)
+          .getOrElse(throw new RuntimeException("model read failed"))
+      ).toOption
 
-    // Use decimated 8k mesh if available, otherwise full-res.
-    // keepLargestComponent removes isolated triangles produced by stride-based
-    // decimation, which otherwise appear as floating fragments in the viewer.
-    def loadWorkingMesh(s: ScapulaData.Specimen): TriangleMesh[_3D] = {
-      val dec8k = new File(preDir, s.modelId + ".stl")
-      val raw   = if (dec8k.exists()) ScapulaData.loadMesh(dec8k)
-                  else ScapulaData.loadMesh(s.file)
-      val mesh  = Decimation.keepLargestComponent(raw)
-      if (s.isRight) ScapulaData.mirrorMesh(mesh) else mesh
+    // 8k decimated mesh with mirroring for right scapulae
+    def workingMesh(spec: ScapulaData.Specimen): TriangleMesh[_3D] = {
+      val f = new File(preDir, spec.modelId + ".stl")
+      val raw = if (f.exists()) ScapulaData.loadMesh(f)
+                else ScapulaData.loadMesh(spec.file)
+      val mesh = Decimation.keepLargestComponent(raw)
+      if (spec.isRight) ScapulaData.mirrorMesh(mesh) else mesh
     }
 
-    def specimenLms(s: ScapulaData.Specimen): IndexedSeq[scalismo.geometry.Landmark[_3D]] =
-      if (s.isRight) ScapulaData.mirrorLandmarks(lmMap(s.modelId)) else lmMap(s.modelId)
+    def specimenLms(spec: ScapulaData.Specimen) =
+      if (spec.isRight) ScapulaData.mirrorLandmarks(lmMap(spec.modelId))
+      else lmMap(spec.modelId)
 
     val ui = ScalismoUI("Scapula SSM — Full Pipeline Viewer")
 
     // ════════════════════════════════════════════════════════════════════════
-    // G01 — Landmark-only Procrustes (computed live, NO pipeline files needed)
-    //        ALL bones should roughly overlap here.
-    //        If scattered → landmark placement is wrong.
+    // G01 — Decimated + landmark-Procrustes aligned (live computation)
+    //
+    //   Stage : DECIMATION + RIGID (landmark-only, no ICP)
+    //   Source: 8k working meshes from data/8k/; alignment computed live.
+    //   Space : reference coordinate frame (Procrustes-aligned)
+    //   What to look for: all bones should ROUGHLY overlap.
+    //     If they are scattered → landmark CSV columns are wrong.
+    //     Expect ±30–50 mm spread at this stage (no ICP yet).
     // ════════════════════════════════════════════════════════════════════════
-    println("\n[G01] Landmark-only Procrustes alignment (computed live)")
-    val g01 = ui.createGroup("G01_LandmarkAligned (Procrustes only — should overlap roughly)")
-    var g01Count = 0
-    var g01minX = Double.MaxValue; var g01maxX = Double.MinValue
-    var g01minY = Double.MaxValue; var g01maxY = Double.MinValue
-    var g01minZ = Double.MaxValue; var g01maxZ = Double.MinValue
-    validSpecs.foreach { s =>
-      val mesh    = loadWorkingMesh(s)
-      val lms     = specimenLms(s)
+    println("\n[G01] Decimated + landmark-Procrustes (live, no pipeline needed)")
+    val g01 = ui.createGroup("G01_Decimated_Aligned (8k, landmark-Procrustes, ~30-50mm spread)")
+    var g01n = 0
+    var bbMinX = Double.MaxValue; var bbMaxX = Double.MinValue
+    var bbMinY = Double.MaxValue; var bbMaxY = Double.MinValue
+    var bbMinZ = Double.MaxValue; var bbMaxZ = Double.MinValue
+
+    validSpecs.foreach { spec =>
+      val mesh    = workingMesh(spec)
+      val lms     = specimenLms(spec)
       val trans   = ScapulaData.rigidFromLandmarks(lms, refLms)
       val aligned = mesh.transform(trans)
       aligned.pointSet.points.foreach { p =>
-        if (p.x < g01minX) g01minX = p.x; if (p.x > g01maxX) g01maxX = p.x
-        if (p.y < g01minY) g01minY = p.y; if (p.y > g01maxY) g01maxY = p.y
-        if (p.z < g01minZ) g01minZ = p.z; if (p.z > g01maxZ) g01maxZ = p.z
+        if (p.x < bbMinX) bbMinX = p.x; if (p.x > bbMaxX) bbMaxX = p.x
+        if (p.y < bbMinY) bbMinY = p.y; if (p.y > bbMaxY) bbMaxY = p.y
+        if (p.z < bbMinZ) bbMinZ = p.z; if (p.z > bbMaxZ) bbMaxZ = p.z
       }
-      val v01 = ui.show(g01, aligned, s.modelId)
-      v01.opacity = 0.4
-      g01Count += 1
+      ui.show(g01, aligned, spec.modelId).opacity = 0.4
+      g01n += 1
     }
-    println(s"  $g01Count specimens loaded  (ref: ${refSpec.modelId})")
-    println("  → Press the ↺ (reset-camera) button in the 3D toolbar to fit all bones in view")
-    println(f"  G01 bounding box: X=[${g01minX}%.0f, ${g01maxX}%.0f] " +
-            f"Y=[${g01minY}%.0f, ${g01maxY}%.0f] Z=[${g01minZ}%.0f, ${g01maxZ}%.0f]")
-    val g01extX = g01maxX - g01minX; val g01extY = g01maxY - g01minY; val g01extZ = g01maxZ - g01minZ
-    if (g01extX < 300 && g01extY < 300 && g01extZ < 300)
-      println(s"  ✓ Bounding box is bone-scale (~150mm) — alignment looks correct")
-    else
-      println(s"  ✗ Bounding box is HUGE — landmarks may be wrong or CSV columns misread!")
-    println("  Bones should be ROUGHLY overlapping — if scattered, landmarks are wrong")
+    println(f"  $g01n specimens in reference frame")
+    println(f"  Bounding box: X=[${bbMinX}%.0f, ${bbMaxX}%.0f]  " +
+            f"Y=[${bbMinY}%.0f, ${bbMaxY}%.0f]  Z=[${bbMinZ}%.0f, ${bbMaxZ}%.0f]")
+    val extX = bbMaxX - bbMinX
+    if (extX < 300) println("  ✓ Bone-scale (≤300 mm) — alignment OK")
+    else            println("  ✗ HUGE bounding box — landmark CSV columns may be wrong!")
 
     // ════════════════════════════════════════════════════════════════════════
-    // G02 — Rigid-aligned (landmark + ICP) from pipeline output
-    //        ALL bones must tightly overlap here.
+    // G02 — Rigid-aligned (landmark Procrustes + trimmed ICP) — pipeline output
+    //
+    //   Stage : RIGID REGISTRATION  (landmark Procrustes + 40-iter trimmed ICP)
+    //   Source: rigid_registered/*.stl  (written by Main during pipeline run)
+    //   Space : reference coordinate frame
+    //   What to look for: all bones must TIGHTLY overlap (< 5 mm spread).
+    //     If scattered → ICP did not converge; check Config.icpIterations.
     // ════════════════════════════════════════════════════════════════════════
     println("\n[G02] Rigid-aligned (landmark + ICP) — from pipeline")
-    val rigidFiles: IndexedSeq[File] =
-      if (useNewLayout) stlsIn(new File(resultsDir, "SSM1/rigid_registered"))
-      else stlsIn(new File(outDir, "pass1"), prefix = "rigid_")
-
+    val rigidFiles = stlsIn(rigidDir)
     if (rigidFiles.isEmpty) {
       println("  NOT FOUND — run 'sbt runMain scapula.Main' first")
     } else {
-      val g02 = ui.createGroup(s"G02_RigidAligned (${rigidFiles.length} specimens — ALL must overlap)")
+      val g02 = ui.createGroup(s"G02_RigidAligned (${rigidFiles.length} specimens, landmark+ICP)")
       rigidFiles.foreach { f =>
-        val name = f.getName.stripSuffix(".stl").stripPrefix("rigid_")
-        val v02  = ui.show(g02, ScapulaData.loadMesh(f), name)
-        v02.opacity = 0.4
+        ui.show(g02, ScapulaData.loadMesh(f), f.getName.stripSuffix(".stl")).opacity = 0.4
       }
       println(s"  ${rigidFiles.length} rigid-aligned meshes")
-      println("  Bones MUST overlap here — if not, ICP failed or landmarks are wrong")
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // G03 — Non-rigid, Pass 1 (GP-ICP)
+    // G03 — Non-rigid registered (GP-ICP, in dense correspondence)
+    //
+    //   Stage : NON-RIGID REGISTRATION  (GP-ICP, single Gaussian kernel)
+    //           σ=30mm, scale=10mm, NearestNeighborInterpolator3D
+    //   Source: nonrigid_registered/*.stl
+    //   Space : reference coordinate frame (all meshes have SAME topology)
+    //   What to look for: better overlap than G02; shape variation now reflects
+    //     true biological shape differences, not pose/size differences.
     // ════════════════════════════════════════════════════════════════════════
-    val nrPass1: IndexedSeq[File] =
-      if (useNewLayout) stlsIn(new File(resultsDir, "SSM1/nonrigid_registered"))
-      else stlsIn(new File(outDir, "pass1"), prefix = "reg_")
-
-    if (nrPass1.nonEmpty) {
-      println(s"\n[G03] Non-rigid registered — Pass 1 (${nrPass1.length} specimens)")
-      val g03 = ui.createGroup(s"G03_NonRigid_Pass1 (${nrPass1.length} specimens, GP-ICP reg)")
-      nrPass1.foreach { f =>
-        val name = f.getName.stripSuffix(".stl").stripPrefix("reg_")
-        val v03  = ui.show(g03, ScapulaData.loadMesh(f), name)
-        v03.opacity = 0.4
+    println("\n[G03] Non-rigid registered (GP-ICP, dense correspondence) — from pipeline")
+    val nrFiles = stlsIn(nrDir)
+    if (nrFiles.isEmpty) {
+      println("  NOT FOUND — run pipeline first")
+    } else {
+      val g03 = ui.createGroup(s"G03_NonRigidRegistered (${nrFiles.length} specimens, GP-ICP, same topology)")
+      nrFiles.foreach { f =>
+        ui.show(g03, ScapulaData.loadMesh(f), f.getName.stripSuffix(".stl")).opacity = 0.4
       }
+      println(s"  ${nrFiles.length} non-rigid registered meshes")
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // G04 — Non-rigid, final pass (best correspondences)
-    // ════════════════════════════════════════════════════════════════════════
-    val lastPassN = (1 to 8).reverse.find { n =>
-      val d = if (useNewLayout) new File(resultsDir, s"SSM$n/nonrigid_registered")
-              else new File(outDir, s"pass$n")
-      d.isDirectory && stlsIn(d, if (useNewLayout) "" else "reg_").nonEmpty
-    }
-
-    val lastPassFiles: IndexedSeq[File] = lastPassN.map { n =>
-      val d = if (useNewLayout) new File(resultsDir, s"SSM$n/nonrigid_registered")
-              else new File(outDir, s"pass$n")
-      stlsIn(d, if (useNewLayout) "" else "reg_")
-    }.getOrElse(IndexedSeq.empty)
-
-    if (lastPassFiles.nonEmpty) {
-      val n = lastPassN.get
-      println(s"\n[G04] Non-rigid registered — Pass $n (FINAL — ${lastPassFiles.length} specimens)")
-      val g04 = ui.createGroup(s"G04_NonRigid_Pass$n (${lastPassFiles.length} specimens — FINAL GP-ICP)")
-      lastPassFiles.foreach { f =>
-        val name = f.getName.stripSuffix(".stl").stripPrefix("reg_")
-        val v04  = ui.show(g04, ScapulaData.loadMesh(f), name)
-        v04.opacity = 0.4
-      }
-      if (rigidFiles.nonEmpty) {
-        val d = Metrics.symmetric(ScapulaData.loadMesh(rigidFiles.head), ScapulaData.loadMesh(lastPassFiles.head))
-        println(f"  Rigid vs NonRigid (specimen 1): ${d.render}")
-      }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    // G05 — Mean shapes (convergence check)
-    // ════════════════════════════════════════════════════════════════════════
-    println("\n[G05] Mean shapes — convergence")
-    val g05 = ui.createGroup("G05_MeanShapes (Mean1–4 overlaid — <1 mm shift = converged)")
-    val loadedMeans = (1 to 8).flatMap { n =>
-      val f = if (useNewLayout) new File(resultsDir, s"SSM$n/mean/SSM${n}_mean.stl")
-              else new File(outDir, s"mean_pass$n.stl")
-      loadOpt(f).map { m => ui.show(g05, m, s"Mean$n"); n -> m }
-    }
-    if (loadedMeans.length >= 2) {
-      println(f"  ${"Pair"}%-16s  ${"Mean mm"}%9s  Status")
-      loadedMeans.sliding(2).foreach { w =>
-        val (n1, m1) = w(0); val (n2, m2) = w(1)
-        val st = Metrics.symmetric(m1, m2)
-        println(f"  Mean$n1 ↔ Mean$n2       ${st.mean}%9.3f  ${if (st.mean < 1.0) "CONVERGED" else "not yet"}")
-      }
-    } else println("  No mean shapes found — run pipeline first")
-
-    // ════════════════════════════════════════════════════════════════════════
-    // G06–G10 — SSM (interactive + modes + samples)
-    // ════════════════════════════════════════════════════════════════════════
-    val ssmOpt: Option[StatisticalMeshModel] = lastPassN.flatMap { n =>
-      val h5 = if (useNewLayout) new File(resultsDir, s"SSM$n/model/SSM$n.h5") else new File("")
-      loadModelOpt(h5).orElse {
-        if (lastPassFiles.isEmpty) None
-        else {
-          println(s"\nBuilding SSM from ${lastPassFiles.length} meshes (no .h5 found)...")
-          val meshes = lastPassFiles.map(ScapulaData.loadMesh)
-          if (meshes.length < 3) None
-          else {
+    // ── Load or build SSM ────────────────────────────────────────────────────
+    val ssmOpt: Option[StatisticalMeshModel] = {
+      val h5 = new File(modelDir, "scapula_ssm.h5")
+      loadModelOpt(h5).map { m => println(s"\nSSM loaded from ${h5.getPath}  rank=${m.rank}"); m }
+        .orElse {
+          val meshes = nrFiles.flatMap(f => loadOpt(f))
+          if (meshes.length >= 3) {
+            println(s"\nBuilding SSM from ${meshes.length} non-rigid meshes (no .h5 found)…")
             val dc = DataCollection.fromTriangleMesh3DSequence(meshes.head, meshes)
-            StatisticalMeshModel.createUsingPCA(dc).toOption
-          }
+            StatisticalMeshModel.createUsingPCA(dc).toOption.map { m =>
+              println(s"  Built SSM rank=${m.rank}"); m
+            }
+          } else None
         }
-      }
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // G04 — Mean shape
+    //
+    //   Stage : SSM MEAN  (arithmetic mean of all non-rigidly registered shapes)
+    //   Source: mean/mean.stl (or computed from SSM.mean when file absent)
+    //   Space : reference coordinate frame
+    //   What to look for: compact, representative scapula shape.
+    // ════════════════════════════════════════════════════════════════════════
+    println("\n[G04] Mean shape")
+    val g04 = ui.createGroup("G04_MeanShape (arithmetic mean of registered population)")
+    loadOpt(new File(meanDir, "mean.stl")) match {
+      case Some(m) =>
+        ui.show(g04, m, "mean")
+        println(s"  Mean loaded from file  (${m.pointSet.numberOfPoints} vertices)")
+      case None    =>
+        ssmOpt.foreach { ssm =>
+          ui.show(g04, ssm.mean, "mean_from_ssm")
+          println(s"  Mean from SSM  (${ssm.mean.pointSet.numberOfPoints} vertices)")
+        }
+        if (ssmOpt.isEmpty) println("  Not available — run pipeline first")
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // G05–G09 — SSM groups (only when SSM is available)
+    // ════════════════════════════════════════════════════════════════════════
     ssmOpt match {
       case None =>
-        println("\nNo SSM available — run pipeline first")
+        println("\nNo SSM available — G05-G09 skipped. Run 'sbt runMain scapula.Main'.")
+
       case Some(ssm) =>
         val evs   = ssm.gp.klBasis.map(_.eigenvalue)
         val total = evs.sum
-        println(s"\nSSM rank=${ssm.rank}  (from pass ${lastPassN.getOrElse("?")})")
-        println(f"  ${"Mode"}%5s  ${"Var%%"}%8s  ${"Cumul%%"}%8s  ${"σ mm"}%8s")
+        println(s"\nSSM  rank=${ssm.rank}")
+        println(f"  ${"Mode"}%5s  ${"Var%%"}%8s  ${"Cumul%%"}%8s  ${"σ (mm)"}%10s")
         evs.take(math.min(10, ssm.rank)).zipWithIndex.foreach { case (ev, i) =>
-          println(f"  ${i+1}%5d  ${ev/total*100}%8.2f  ${evs.take(i+1).sum/total*100}%8.2f  ${math.sqrt(ev)}%8.3f")
+          println(f"  ${i+1}%5d  ${ev/total*100}%8.2f  ${evs.take(i+1).sum/total*100}%8.2f  ${math.sqrt(ev)}%10.3f")
         }
-        val meanMesh = ssm.mean
-        val nModes   = math.min(3, ssm.rank)
 
-        // G06 — Interactive
-        println("\n[G06] Interactive SSM — select the group, then drag Mode sliders (right panel)")
-        val g06 = ui.createGroup("G06_SSM_Interactive (select → drag Mode sliders)")
-        ui.show(g06, ssm, "SSM_final")
+        // ── G05 — Interactive SSM ─────────────────────────────────────────────
+        // Select this group in the scene panel, then drag the Mode sliders
+        // that appear in the right-hand panel to explore the shape space.
+        println("\n[G05] Interactive SSM")
+        val g05 = ui.createGroup("G05_SSM_Interactive (select → drag Mode sliders in right panel)")
+        ui.show(g05, ssm, "SSM")
 
-        // G07/G08/G09 — Static mode shapes
+        // ── G06 / G07 / G08 — Static mode shapes (±1σ / ±2σ / ±3σ) ──────────
+        val nModes = math.min(3, ssm.rank)
         (0 until nModes).foreach { modeIdx =>
           val sigma  = math.sqrt(evs(modeIdx))
           val varPct = evs(modeIdx) / total * 100.0
-          val gNum   = 7 + modeIdx
-          println(s"\n[G0$gNum] Mode ${modeIdx+1}: σ=${sigma.toInt}mm  var=${varPct.toInt}%%")
+          val gNum   = 6 + modeIdx
+          println(s"\n[G0$gNum] Mode ${modeIdx + 1}: σ=${f"$sigma%.1f"}mm  ${f"$varPct%.1f"}% variance")
           val mGrp = ui.createGroup(
-            s"G0${gNum}_Mode${modeIdx+1} (σ=${sigma.toInt}mm, ${varPct.toInt}%% var) ±1σ/±2σ/±3σ")
+            f"G0${gNum}_Mode${modeIdx+1} (σ=${sigma.toInt}mm, ${varPct.toInt}%% var)  ±1σ/±2σ/±3σ overlaid")
 
-          def coeff(alpha: Double): DenseVector[Double] =
-            DenseVector(Array.tabulate(ssm.rank)(j => if (j == modeIdx) alpha * sigma else 0.0))
+          def coeff(a: Double) =
+            DenseVector(Array.tabulate(ssm.rank)(j => if (j == modeIdx) a * sigma else 0.0))
 
-          ui.show(mGrp, meanMesh,                  s"Mode${modeIdx+1}_mean"    ).opacity = 0.9
-          ui.show(mGrp, ssm.instance(coeff( 1.0)), s"Mode${modeIdx+1}_+1sigma" ).opacity = 0.5
-          ui.show(mGrp, ssm.instance(coeff(-1.0)), s"Mode${modeIdx+1}_-1sigma" ).opacity = 0.5
-          ui.show(mGrp, ssm.instance(coeff( 2.0)), s"Mode${modeIdx+1}_+2sigma" ).opacity = 0.4
-          ui.show(mGrp, ssm.instance(coeff(-2.0)), s"Mode${modeIdx+1}_-2sigma" ).opacity = 0.4
-          ui.show(mGrp, ssm.instance(coeff( 3.0)), s"Mode${modeIdx+1}_+3sigma" ).opacity = 0.3
-          ui.show(mGrp, ssm.instance(coeff(-3.0)), s"Mode${modeIdx+1}_-3sigma" ).opacity = 0.3
+          // Graduated opacity: mean is most opaque, ±3σ is most transparent.
+          // This reduces Z-fighting between the 7 overlapping surfaces.
+          ui.show(mGrp, ssm.mean,                  s"mode${modeIdx+1}_mean"   ).opacity = 0.9
+          ui.show(mGrp, ssm.instance(coeff( 1.0)),  s"mode${modeIdx+1}_+1sigma").opacity = 0.55
+          ui.show(mGrp, ssm.instance(coeff(-1.0)),  s"mode${modeIdx+1}_-1sigma").opacity = 0.55
+          ui.show(mGrp, ssm.instance(coeff( 2.0)),  s"mode${modeIdx+1}_+2sigma").opacity = 0.4
+          ui.show(mGrp, ssm.instance(coeff(-2.0)),  s"mode${modeIdx+1}_-2sigma").opacity = 0.4
+          ui.show(mGrp, ssm.instance(coeff( 3.0)),  s"mode${modeIdx+1}_+3sigma").opacity = 0.3
+          ui.show(mGrp, ssm.instance(coeff(-3.0)),  s"mode${modeIdx+1}_-3sigma").opacity = 0.3
         }
 
-        // G10 — Random samples
-        println("\n[G10] 5 random SSM instances")
-        val g10 = ui.createGroup("G10_ModelSamples (5 random instances)")
-        (1 to 5).foreach { i => ui.show(g10, ssm.sample(), s"Sample_$i").opacity = 0.4 }
+        // ── G09 — Random samples ──────────────────────────────────────────────
+        println("\n[G09] 5 random SSM instances (specificity check)")
+        val g09 = ui.createGroup("G09_ModelSamples (5 random instances — should look like scapulae)")
+        (1 to 5).foreach { i => ui.show(g09, ssm.sample(), s"sample_$i").opacity = 0.4 }
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // G11 — SSM mean mesh (in SSM coordinate space — same as G06-G10)
-    //        If no SSM is available, falls back to reference mesh.
+    // G10 — Reference mesh + landmarks
     //
-    // IMPORTANT: The original reference mesh (refSpec) is in SCANNER space,
-    // which differs from SSM space after 4 iterations.  Showing it alongside
-    // SSM groups forces ScalismoUI to zoom out to encompass both coordinate
-    // frames, making all aligned bones appear as tiny fragments.  We therefore
-    // always show the SSM mean (or the last-pass registration mean) here.
+    //   The reference mesh is shown in the reference coordinate frame —
+    //   the same frame as all other groups — so the camera is not affected.
+    //   Source: model/reference.stl (saved by pipeline) or live from 8k folder.
     // ════════════════════════════════════════════════════════════════════════
-    println(s"\n[G11] SSM Mean / Reference")
-    val g11 = ui.createGroup("G11_SSMMean (mean shape in SSM coordinate space)")
-    ssmOpt match {
-      case Some(ssm) =>
-        val meanMeshG11 = ssm.mean
-        ui.show(g11, meanMeshG11, "SSM_mean")
-        println(f"  SSM mean shown (${meanMeshG11.pointSet.numberOfPoints} vertices, same space as G06-G10)")
-      case None =>
-        // Fallback: show reference in its own space (may shift camera if SSM groups absent)
-        val refMeshFallback = loadWorkingMesh(refSpec)
-        ui.show(g11, refMeshFallback, "REF_mesh")
-        ui.show(g11, refLms,          "REF_landmarks")
-        println(f"  Reference mesh shown (no SSM available): ${refMeshFallback.pointSet.numberOfPoints} vertices")
-        refLms.foreach { lm =>
-          println(f"  ${lm.id}%6s  (${lm.point.x}%.1f, ${lm.point.y}%.1f, ${lm.point.z}%.1f)")
-        }
+    println(s"\n[G10] Reference: ${refSpec.modelId}")
+    val g10 = ui.createGroup(s"G10_Reference (${refSpec.modelId})  + landmarks")
+    val refMeshDisplay = loadOpt(new File(modelDir, "reference.stl"))
+      .getOrElse(workingMesh(refSpec))
+    ui.show(g10, refMeshDisplay, "reference_mesh")
+    ui.show(g10, refLms,        "landmarks_GC_TS_IA_PLA_AC")
+    println(f"  ${refMeshDisplay.pointSet.numberOfPoints} vertices")
+    refLms.foreach { lm =>
+      println(f"  ${lm.id}%5s  (${lm.point.x}%7.1f, ${lm.point.y}%7.1f, ${lm.point.z}%7.1f)")
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    // Guide
-    // NOTE: Raw-input and raw-space landmark groups are intentionally omitted.
-    // Those groups are in original scanner coordinates (spanning ~1200 mm),
-    // which forces the ScalismoUI camera to zoom out so far that all aligned
-    // bones appear as tiny triangle fragments.  View raw STL files separately
-    // in Scalismo UI or Paraview if needed.
-    // ════════════════════════════════════════════════════════════════════════
+    // ── Viewer guide ─────────────────────────────────────────────────────────
     println("\n" + "═" * 72)
-    println("  VIEWER GUIDE — groups listed in inspection order")
+    println("  VIEWER — all groups in reference coordinate space")
+    println("  Eye icon in scene panel = hide / show group")
     println("═" * 72)
-    println("  G01_LandmarkAligned  → roughly overlapping (landmark Procrustes)")
-    println("  G02_RigidAligned     → ALL bones must overlap tightly (ICP result)")
-    println("  G03_NonRigid_Pass1   → GP-ICP pass 1 (tighter than G02)")
-    println("  G04_NonRigid_Final   → BEST registration (use for publication)")
-    println("  G05_MeanShapes       → convergence: <1 mm shift between passes")
-    println("  G06_SSM_Interactive  → select group → drag Mode sliders on right")
-    println("  G07/G08/G09_Mode1-3  → ±1σ/±2σ/±3σ static shapes")
-    println("  G10_ModelSamples     → 5 random instances")
-    println("  G11_SSMMean          → SSM mean mesh (same coordinate space as G06-G10)")
-    println("  NOTE: Raw-input groups omitted — they span ~1200mm and distort camera.")
+    println("  G01  Decimated_Aligned       8k meshes, landmark-Procrustes (live)")
+    println("       → bones ROUGHLY overlap; spread ~30-50 mm at this stage")
+    println("  G02  RigidAligned            landmark + ICP  (from pipeline)")
+    println("       → bones TIGHTLY overlap; spread < 5 mm expected")
+    println("  G03  NonRigidRegistered      GP-ICP, dense correspondence")
+    println("       → all meshes share the same vertex topology as the reference")
+    println("  G04  MeanShape               SSM mean (average scapula shape)")
+    println("  G05  SSM_Interactive         select → drag Mode sliders (right panel)")
+    println("  G06  Mode1  ±1σ/±2σ/±3σ     shape variation along PC1")
+    println("  G07  Mode2  ±1σ/±2σ/±3σ     shape variation along PC2")
+    println("  G08  Mode3  ±1σ/±2σ/±3σ     shape variation along PC3")
+    println("  G09  ModelSamples            5 random instances (should look like scapulae)")
+    println("  G10  Reference               reference mesh + 5 landmarks")
+    println("─" * 72)
+    println("  NOTE: Raw scanner-space meshes are NOT shown — they span ~1200 mm")
+    println("        and force the camera so far out that all bones look like specks.")
+    println("        View raw STLs in ParaView or MeshLab if needed.")
     println("═" * 72)
   }
 }
