@@ -20,7 +20,7 @@ import java.io.{File, FileNotFoundException, PrintWriter}
  *
  * Prerequisites: the main pipeline must have been run first.
  * Reads:  <SCAPULA_OUT_DIR>/results/SSM{1..4}/model/SSM{n}.h5
- *         <SCAPULA_OUT_DIR>/results/SSM{1..4}/nonrigid_registered/*.stl
+ *         <SCAPULA_OUT_DIR>/results/SSM{1..4}/nonrigid_registered/ (stl files)
  * Writes: <SCAPULA_OUT_DIR>/validation/compactness.csv
  *         <SCAPULA_OUT_DIR>/validation/generalization.csv
  *         <SCAPULA_OUT_DIR>/validation/specificity.csv
