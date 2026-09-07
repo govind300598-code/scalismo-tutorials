@@ -49,6 +49,17 @@ object NonRigidReg {
     current
   }
 
+  /** Build the GP deformation model (prior) on `reference` — used for visualization. */
+  def buildGPModel(reference: TriangleMesh[_3D])(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
+    val scalarKernel = GaussianKernel[_3D](Config.gpSigma) * Config.gpScale
+    val kernel       = DiagonalKernel(scalarKernel, 3)
+    val zeroMean     = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
+    val gp           = GaussianProcess(zeroMean, kernel)
+    val sampler      = UniformMeshSampler3D(reference, Config.gpBasis * 10)
+    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, Config.gpBasis)
+    PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
+  }
+
   /** Pointwise mean of meshes already in correspondence (same topology). */
   def meanMesh(meshes: IndexedSeq[TriangleMesh[_3D]]): TriangleMesh[_3D] = {
     require(meshes.nonEmpty)
