@@ -30,7 +30,7 @@ object Config {
    * Number of non-rigid registration passes. Pass 1 registers to the initial reference; each further pass rebuilds the
    * reference as the mean of the previous pass and re-registers. This removes reference bias.
    */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "1").toInt
 
   // ── GP kernel (single Gaussian): k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃ ──
   /** Length scale of the Gaussian kernel (mm). Controls spatial reach of deformations.
