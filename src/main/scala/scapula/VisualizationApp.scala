@@ -53,8 +53,12 @@ object VisualizationApp {
     val s01 = ui.createGroup("S01_Landmarks (GC/TS/IA/PLA/AC on every specimen)")
     specimens.foreach(s => safeShow(ui, s01, s.lms.toList, s.id))
 
-    // ── S02: Reference ────────────────────────────────────────────────────────
-    val ref = specimens.head
+    // ── S02: Reference — prefer specimen 002, female, left side ──────────────
+    val ref = specimens
+      .find(s => s.id.contains("002") && s.id.toLowerCase.contains("_f_") && !s.id.endsWith("_mirrored"))
+      .orElse(specimens.find(s => s.id.contains("002") && !s.id.endsWith("_mirrored")))
+      .getOrElse(specimens.head)
+    println(s"[info] Reference specimen: ${ref.id}")
     val s02 = ui.createGroup("S02_Reference")
     safeShow(ui, s02, ref.mesh, ref.id)
     safeShow(ui, s02, ref.lms.toList, ref.id + "_lms")

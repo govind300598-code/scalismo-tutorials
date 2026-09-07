@@ -21,7 +21,7 @@ object Config {
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
 
   /** Rigid ICP iterations (landmark Procrustes + trimmed ICP). */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
