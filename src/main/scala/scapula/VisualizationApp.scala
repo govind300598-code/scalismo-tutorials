@@ -80,7 +80,9 @@ object VisualizationApp {
       SSMBuilder.loadMeshes("pass_1").getOrElse {
         val r = rigidAligned.zipWithIndex.map { case (s, i) =>
           print(s"  NR ${i+1}/${rigidAligned.length}\r")
-          NonRigidReg.register(decRef, s.mesh)
+          val result = NonRigidReg.register(decRef, s.mesh)
+          Thread.sleep(300) // brief pause between specimens to prevent sustained 100% CPU
+          result
         }
         SSMBuilder.saveMeshes(r, "pass_1")
         r

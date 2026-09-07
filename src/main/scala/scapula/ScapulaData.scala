@@ -21,10 +21,10 @@ object Config {
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "4000").toInt
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
 
   /** Rigid ICP iterations (landmark Procrustes + trimmed ICP). */
-  val icpIterations: Int = env("SCAPULA_ICP_ITERS", "20").toInt
+  val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
 
   /**
    * Number of non-rigid registration passes. Pass 1 registers to the initial reference; each further pass rebuilds the
@@ -41,10 +41,10 @@ object Config {
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
 
   /** Number of Nystrom basis functions for the low-rank GP approximation. */
-  val gpBasis: Int = env("SCAPULA_GP_BASIS", "40").toInt
+  val gpBasis: Int = env("SCAPULA_GP_BASIS", "100").toInt
 
   /** GP-ICP iterations per non-rigid registration pass. */
-  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "5").toInt
+  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "10").toInt
 
   /** Observation noise variance in the GP posterior update step. */
   val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
