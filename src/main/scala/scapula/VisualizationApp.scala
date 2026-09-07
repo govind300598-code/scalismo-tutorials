@@ -93,6 +93,10 @@ object VisualizationApp {
       println(f"[info]   ${i+1}%2d   ${pct}%5.2f  ${cumul}%6.2f  ${math.sqrt(ev)}%7.3f")
     }
 
+    // ── SSM Validation ───────────────────────────────────────────────────────
+    println("[Validation] Computing compactness, generalization, specificity...")
+    SSMValidation.printReport(ssm, decRef, registered)
+
     // ── 7. Viewer ─────────────────────────────────────────────────────────────
     println("[UI] Opening Scalismo viewer...")
     val ui = ScalismoUI("Scapula SSM")
