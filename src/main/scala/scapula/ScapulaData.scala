@@ -41,10 +41,10 @@ object Config {
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
 
   /** Number of Nystrom basis functions for the low-rank GP approximation. */
-  val gpBasis: Int = env("SCAPULA_GP_BASIS", "100").toInt
+  val gpBasis: Int = env("SCAPULA_GP_BASIS", "70").toInt
 
   /** GP-ICP iterations per non-rigid registration pass. */
-  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "10").toInt
+  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "8").toInt
 
   /** Observation noise variance in the GP posterior update step. */
   val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
