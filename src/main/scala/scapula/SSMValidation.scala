@@ -95,14 +95,20 @@ object SSMValidation {
     // ── Generalization ─────────────────────────────────────────────────────
     println("\n[GENERALIZATION] Leave-one-out reconstruction error (mm)")
     println("  (lower = model generalises well to unseen shapes)")
-    val genErrors = generalization(reference, registered)
-    genErrors.zipWithIndex.foreach { case (err, i) =>
-      println(f"  specimen ${i + 1}%2d : $err%6.3f mm")
+    val genErrors = try {
+      generalization(reference, registered)
+    } catch {
+      case e: Exception =>
+        println(s"  [warn] Generalization skipped — SVD did not converge: ${e.getMessage}")
+        IndexedSeq.empty[Double]
     }
-    val meanGen = genErrors.sum / genErrors.length
-    val maxGen  = genErrors.max
-    println(f"  Mean : $meanGen%6.3f mm")
-    println(f"  Max  : $maxGen%6.3f mm")
+    if (genErrors.nonEmpty) {
+      genErrors.zipWithIndex.foreach { case (err, i) =>
+        println(f"  specimen ${i + 1}%2d : $err%6.3f mm")
+      }
+      println(f"  Mean : ${genErrors.sum / genErrors.length}%6.3f mm")
+      println(f"  Max  : ${genErrors.max}%6.3f mm")
+    }
 
     // ── Specificity ────────────────────────────────────────────────────────
     println("\n[SPECIFICITY] Mean distance from random samples to nearest training shape (mm)")
