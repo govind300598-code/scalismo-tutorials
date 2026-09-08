@@ -41,7 +41,7 @@ object Config {
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
 
   /** Number of Nystrom basis functions for the low-rank GP approximation. */
-  val gpBasis: Int = env("SCAPULA_GP_BASIS", "60").toInt
+  val gpBasis: Int = env("SCAPULA_GP_BASIS", "100").toInt
 
   /** GP-ICP iterations per non-rigid registration pass. */
   val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "10").toInt
