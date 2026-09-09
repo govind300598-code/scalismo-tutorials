@@ -76,17 +76,20 @@ object VisualizationApp {
 
     // ── 6. Non-rigid registration ──────────────────────────────────────────────
     println("[S05] Non-rigid GP-ICP")
-    val registered: IndexedSeq[TriangleMesh[_3D]] =
-      SSMBuilder.loadMeshes("pass_1").getOrElse {
-        val r = rigidAligned.zipWithIndex.map { case (s, i) =>
+    val registered: IndexedSeq[TriangleMesh[_3D]] = {
+      val cacheDir = SSMBuilder.cacheDir("pass_1")
+      cacheDir.mkdirs()
+      rigidAligned.zipWithIndex.map { case (s, i) =>
+        val cached = SSMBuilder.loadOneMesh("pass_1", i)
+        cached.getOrElse {
           print(s"  NR ${i+1}/${rigidAligned.length}\r")
           val result = NonRigidReg.register(decRef, s.mesh)
+          SSMBuilder.saveOneMesh(result, "pass_1", i)
           Thread.sleep(300) // brief pause between specimens to prevent sustained 100% CPU
           result
         }
-        SSMBuilder.saveMeshes(r, "pass_1")
-        r
       }
+    }
     println(s"\n[info] ${registered.length} non-rigid registered")
 
     // Mean shape from registered

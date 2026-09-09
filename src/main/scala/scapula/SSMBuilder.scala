@@ -57,6 +57,19 @@ object SSMBuilder {
     if (meshes.length == files.length) Some(meshes.toIndexedSeq) else None
   }
 
+  def saveOneMesh(mesh: TriangleMesh[_3D], tag: String, index: Int): Unit = {
+    val dir = cacheDir(tag)
+    dir.mkdirs()
+    MeshIO.writeMesh(mesh, new File(dir, f"mesh_$index%04d.vtk"))
+      .recover { case e => println(s"[warn] Could not save mesh $index: ${e.getMessage}") }
+  }
+
+  def loadOneMesh(tag: String, index: Int): Option[TriangleMesh[_3D]] = {
+    val f = new File(cacheDir(tag), f"mesh_$index%04d.vtk")
+    if (!f.exists()) None
+    else MeshIO.readMesh(f).toOption
+  }
+
   def saveSSM(model: PointDistributionModel[_3D, TriangleMesh], name: String): Unit = {
     Config.outDir.mkdirs()
     StatisticalModelIO.writeStatisticalTriangleMeshModel3D(model, new File(Config.outDir, s"$name.h5"))
