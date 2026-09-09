@@ -49,15 +49,14 @@ object QuickPatchDemoApp {
         else           Spec(s.modelId, raw, lms)
       }
 
-    // Reference = 002_M_56_L
-    val ref = all.find(s => s.id.contains("002") && !s.id.endsWith("_mir")).getOrElse(all.head)
+    // Reference = 001_M_64_L  (matches old S05 screenshot exactly)
+    val ref = all.find(s => s.id.contains("001") && !s.id.endsWith("_mir")).getOrElse(all.head)
     println(s"[info] Reference: ${ref.id}")
 
-    // Pick 2 specimens: same-person mirror first (best match → most Z-fighting patches)
-    val N = 2
-    val samePersonMirror = all.find(s => s.id.contains("002") && s.id.endsWith("_mir"))
-    val others = all.filterNot(s => s.id == ref.id || s.id == samePersonMirror.map(_.id).getOrElse(""))
-    val targets = (samePersonMirror.toSeq ++ others).take(N).toIndexedSeq
+    // Target = 002_M_56_R mirrored — large cross-subject shape difference → small patch artifacts
+    val N = 1
+    val target002Rmir = all.find(s => s.id.contains("002") && s.id.endsWith("_mir"))
+    val targets = target002Rmir.toSeq.take(1).toIndexedSeq
     println(s"[info] Targets: ${targets.map(_.id).mkString(", ")}")
 
     // Rigid alignment
@@ -75,11 +74,10 @@ object QuickPatchDemoApp {
     val decRef = ref.mesh.operations.decimate(Config.modelResolution)
     println(s"[info] Decimated reference: ${decRef.pointSet.numberOfPoints} pts")
 
-    // NR with 40 iterations — tight convergence for dense Z-fighting patches
-    println(s"[step] Non-rigid registration (${N} specimens, 40 iterations each)...")
+    // NR with 40 iterations — tight convergence for small patch artifacts
+    println(s"[step] Non-rigid registration (${N} specimen, 40 iterations)...")
     val registered = rigidAligned.zipWithIndex.map { case (s, i) =>
       print(s"  NR ${i+1}/$N  ${s.id}\r")
-      // Override iterations to 3 for speed
       val result = registerFast(decRef, s.mesh)
       result
     }
@@ -87,40 +85,34 @@ object QuickPatchDemoApp {
 
     // Open viewer
     println("[UI] Opening viewer...")
-    val ui = ScalismoUI("Patch Demo — 5 specimens")
+    val ui = ScalismoUI("Patch Demo — 001 ref + 002_R_mir registered")
     Thread.sleep(1500)
 
     // G0: Reference alone
     val g0 = ui.createGroup("G0 Reference")
     viz(ui, g0, decRef, "reference")
 
-    // G1: All 5 registered overlaid on reference → Z-fighting / patches
-    val g1 = ui.createGroup("G1 Reference + 5 registered OVERLAID (patches / Z-fighting)")
-    viz(ui, g1, decRef, "reference_white")
-    registered.zip(rigidAligned).foreach { case (m, s) =>
-      viz(ui, g1, m, s.id)
-    }
+    // G1: Registered overlaid on reference → scattered patch artifacts
+    val g1 = ui.createGroup(s"G1 Patches: ref(001_L white) + registered(${rigidAligned.head.id} red)")
+    viz(ui, g1, decRef, "reference_001_L_white")
+    viz(ui, g1, registered.head, rigidAligned.head.id + "_registered_red")
 
-    // G2: Cross-subject (worst match) — shows small patch artifacts from local kernel failure
-    val worstIdx = registered.indices.maxBy { i =>
-      val d = Metrics.surfaceDistances(registered(i), decRef)
-      d.sum / d.length
-    }
-    val g2 = ui.createGroup(s"G2 Cross-subject patches: ${rigidAligned(worstIdx).id}")
-    viz(ui, g2, decRef,                "reference_white")
-    viz(ui, g2, registered(worstIdx),  "registered_cross_subject")
+    // G2: Before vs after NR
+    val g2 = ui.createGroup(s"G2 Before/After NR: ${rigidAligned.head.id}")
+    viz(ui, g2, rigidAligned.head.mesh, "before_NR_rigid_aligned")
+    viz(ui, g2, registered.head,        "after_NR_registered")
+    viz(ui, g2, decRef,                 "reference_001_L")
 
-    // G3: Before vs after NR for first specimen
-    val g3 = ui.createGroup(s"G3 Before/After NR: ${rigidAligned.head.id}")
-    viz(ui, g3, rigidAligned.head.mesh, "before_NR")
-    viz(ui, g3, registered.head, "after_NR")
-    viz(ui, g3, decRef, "reference")
+    // G3: Target alone (rigid aligned, before NR)
+    val g3 = ui.createGroup(s"G3 Target rigid-aligned (before NR): ${rigidAligned.head.id}")
+    viz(ui, g3, rigidAligned.head.mesh, rigidAligned.head.id)
 
     println("\n[info] Groups:")
-    println("[info]  G0  Reference alone")
-    println("[info]  G1  All 5 registered + reference OVERLAID → turn this on for patches")
-    println("[info]  G2  Best-match specimen overlaid → maximum Z-fighting patches")
-    println("[info]  G3  One specimen before/after NR")
+    println("[info]  G0  Reference (001_M_64_L) alone")
+    println(s"[info]  G1  PATCHES: ref(001_L white) + registered(${rigidAligned.head.id} red)")
+    println("[info]       → This is the small scattered patch pattern from old S05 screenshot")
+    println("[info]  G2  Before/After NR for same specimen")
+    println("[info]  G3  Target rigid-aligned alone")
     println("[info] Close window to exit.")
   }
 
