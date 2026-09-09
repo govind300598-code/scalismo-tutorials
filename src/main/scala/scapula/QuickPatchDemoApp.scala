@@ -75,8 +75,8 @@ object QuickPatchDemoApp {
     val decRef = ref.mesh.operations.decimate(Config.modelResolution)
     println(s"[info] Decimated reference: ${decRef.pointSet.numberOfPoints} pts")
 
-    // NR with REDUCED iterations (3 instead of 8) — faster, also produces visible patches
-    println(s"[step] Non-rigid registration (${N} specimens, 3 iterations each)...")
+    // NR with 40 iterations — tight convergence for dense Z-fighting patches
+    println(s"[step] Non-rigid registration (${N} specimens, 40 iterations each)...")
     val registered = rigidAligned.zipWithIndex.map { case (s, i) =>
       print(s"  NR ${i+1}/$N  ${s.id}\r")
       // Override iterations to 3 for speed
