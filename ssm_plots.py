@@ -1,322 +1,373 @@
 #!/usr/bin/env python3
 """
-Publication-quality SSM validation plots — Scapula Statistical Shape Model
-Run:  python3 ssm_plots.py
-Saves: ssm_compactness.pdf/png  ssm_scree.pdf/png
-       ssm_generalization.pdf/png  ssm_modes_sigma.pdf/png
-       ssm_validation_combined.pdf/png
+SSM Validation Plots — Publication Quality
+Standard format for Journal of Biomechanics / Medical Image Analysis / Annals BME
+
+Run:    python3 ssm_plots.py
+Output: ssm_fig1_compactness.pdf/png
+        ssm_fig2_generalization.pdf/png
+        ssm_fig3_scree.pdf/png
+        ssm_fig4_combined.pdf/png        ← main paper figure
 """
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+import matplotlib.ticker as ticker
 from matplotlib.gridspec import GridSpec
 
-# ── Publication style (IEEE / Journal of Biomechanics / MedIA) ────────────────
-matplotlib.rcParams.update({
-    'font.family':        'serif',
-    'font.serif':         ['Times New Roman', 'DejaVu Serif'],
-    'font.size':          10,
-    'axes.labelsize':     10,
-    'axes.titlesize':     11,
-    'axes.titleweight':   'bold',
-    'xtick.labelsize':    9,
-    'ytick.labelsize':    9,
-    'legend.fontsize':    9,
-    'figure.dpi':         150,
-    'savefig.dpi':        300,
-    'savefig.bbox':       'tight',
-    'axes.linewidth':     0.8,
-    'lines.linewidth':    1.8,
-    'xtick.direction':    'out',
-    'ytick.direction':    'out',
-    'axes.spines.top':    False,
-    'axes.spines.right':  False,
-    'pdf.fonttype':       42,   # embed fonts in PDF
-    'ps.fonttype':        42,
+# ── Global style ──────────────────────────────────────────────────────────────
+plt.rcParams.update({
+    # Font
+    'font.family':         'sans-serif',
+    'font.sans-serif':     ['Arial', 'DejaVu Sans', 'Helvetica'],
+    'font.size':           9,
+    'axes.labelsize':      10,
+    'axes.titlesize':      10,
+    'axes.titleweight':    'bold',
+    'axes.titlepad':       8,
+    'xtick.labelsize':     8.5,
+    'ytick.labelsize':     8.5,
+    'legend.fontsize':     8.5,
+    # Axes
+    'axes.linewidth':      0.8,
+    'axes.spines.top':     False,
+    'axes.spines.right':   False,
+    'axes.grid':           True,
+    'grid.color':          '#E0E0E0',
+    'grid.linewidth':      0.6,
+    'grid.linestyle':      '-',
+    'axes.axisbelow':      True,
+    # Ticks
+    'xtick.direction':     'out',
+    'ytick.direction':     'out',
+    'xtick.major.width':   0.8,
+    'ytick.major.width':   0.8,
+    'xtick.major.size':    4,
+    'ytick.major.size':    4,
+    # Lines
+    'lines.linewidth':     1.8,
+    # Save
+    'savefig.dpi':         300,
+    'savefig.bbox':        'tight',
+    'savefig.pad_inches':  0.05,
+    'pdf.fonttype':        42,
+    'ps.fonttype':         42,
 })
 
-BLUE       = '#2166AC'
-LIGHT_BLUE = '#4393C3'
-RED        = '#D6604D'
-ORANGE     = '#F4A582'
-GREY       = '#888888'
+# Palette (colorblind-safe: blue / orange / grey)
+C_BLUE   = '#1F77B4'
+C_ORANGE = '#FF7F0E'
+C_RED    = '#D62728'
+C_GREY   = '#7F7F7F'
+C_LBLUE  = '#AEC7E8'
 
-# ── Raw data from SSM validation output ───────────────────────────────────────
-N_SPECIMENS = 24
-N_VERTICES  = 8001   # after decimation
+# ── Data ──────────────────────────────────────────────────────────────────────
+# Compactness: (mode index, cumulative variance %)
+MODES_K  = np.array([1,  2,     3,     5,     10,    15,    20,    24])
+CUMUL_V  = np.array([46.60, 56.96, 64.07, 74.31, 89.47, 96.00, 99.26, 100.0])
 
-# Compactness: (mode, cumulative variance %)
-compactness_pts = np.array([
-    [1,  46.60],
-    [2,  56.96],
-    [3,  64.07],
-    [5,  74.31],
-    [10, 89.47],
-    [15, 96.00],
-    [20, 99.26],
-    [24, 100.00],
-])
+# Modes 1–10: individual variance %, shape-space σ (mm)
+MODES_10   = np.arange(1, 11)
+INDIV_V    = np.array([46.60, 10.36, 7.11, 5.57, 4.67,
+                        4.59,  3.42,  2.64, 2.42, 2.08])
+SIGMA_MM   = np.array([283.258, 133.531, 110.633, 97.953, 89.688,
+                         88.922,  76.716,  67.409,  64.612, 59.915])
+N_VERTS    = 8001
+SIGMA_VTEX = SIGMA_MM / np.sqrt(N_VERTS)   # mean per-vertex displacement (mm)
 
-# Individual mode variance % and shape-space σ (mm) for modes 1–10
-modes_10    = np.arange(1, 11)
-indiv_var   = np.array([46.60, 10.36, 7.11, 5.57, 4.67,
-                         4.59,  3.42, 2.64, 2.42, 2.08])
-sigma_shape = np.array([283.258, 133.531, 110.633, 97.953, 89.688,
-                          88.922,  76.716,  67.409,  64.612, 59.915])
-# Average per-vertex displacement for 1 σ move along each mode
-sigma_vertex = sigma_shape / np.sqrt(N_VERTICES)   # mm/vertex
+# Generalization: LOO error per specimen (mm)
+GEN = np.array([0.652, 0.529, 0.397, 0.404, 0.950,
+                1.033, 0.998, 1.067, 0.953, 0.901,
+                0.972, 0.888, 0.911, 0.828, 1.370,
+                1.482, 0.796, 0.877, 0.811, 0.836,
+                1.187, 1.098, 0.808, 0.775])
 
-# Generalization: leave-one-out reconstruction error per specimen (mm)
-gen_errors = np.array([
-    0.652, 0.529, 0.397, 0.404, 0.950,
-    1.033, 0.998, 1.067, 0.953, 0.901,
-    0.972, 0.888, 0.911, 0.828, 1.370,
-    1.482, 0.796, 0.877, 0.811, 0.836,
-    1.187, 1.098, 0.808, 0.775,
-])
-gen_mean = gen_errors.mean()
-gen_std  = gen_errors.std()
-gen_max  = gen_errors.max()
+SPEC = 1.288   # specificity mean (mm, 50 samples)
 
-# Specificity
-specificity_mean = 1.288   # mean over 50 random samples
+N = len(GEN)
+SPEC_IDS = np.arange(1, N + 1)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 1 — Compactness curve
+# Helper: smooth compactness curve via linear interpolation on dense grid
 # ══════════════════════════════════════════════════════════════════════════════
-def plot_compactness(ax, fontsize_annot=8):
-    mx = compactness_pts[:, 0]
-    cv = compactness_pts[:, 1]
-
-    # linear interpolation between known points for a clean curve
-    modes_fine  = np.linspace(1, 24, 500)
-    cumul_fine  = np.interp(modes_fine, mx, cv)
-
-    ax.fill_between(modes_fine, cumul_fine, alpha=0.12, color=BLUE)
-    ax.plot(modes_fine, cumul_fine, color=BLUE, linewidth=2, zorder=3, label='Cumulative variance')
-    ax.scatter(mx, cv, color=BLUE, s=35, zorder=4)
-
-    # threshold lines
-    ax.axhline(90, color=RED,    linestyle='--', linewidth=1.0, label='90% (11 modes)')
-    ax.axhline(95, color=ORANGE, linestyle=':',  linewidth=1.2, label='95% (14 modes)')
-    ax.axvline(11, color=RED,    linestyle='--', linewidth=0.7, alpha=0.5)
-    ax.axvline(14, color=ORANGE, linestyle=':',  linewidth=0.9, alpha=0.5)
-
-    ax.annotate('11 modes\n@90%', xy=(11, 90), xytext=(12.5, 84),
-                fontsize=fontsize_annot, color=RED,
-                arrowprops=dict(arrowstyle='->', color=RED, lw=0.8))
-    ax.annotate('14 modes\n@95%', xy=(14, 95), xytext=(16, 89),
-                fontsize=fontsize_annot, color='#B35806',
-                arrowprops=dict(arrowstyle='->', color='#B35806', lw=0.8))
-
-    ax.set_xlabel('Number of Modes')
-    ax.set_ylabel('Cumulative Variance Explained (%)')
-    ax.set_xlim(1, 24)
-    ax.set_ylim(40, 103)
-    ax.set_xticks([1, 5, 10, 15, 20, 24])
-    ax.legend(frameon=False, loc='lower right', fontsize=fontsize_annot)
-    ax.grid(axis='y', linewidth=0.4, alpha=0.35, color=GREY)
-    ax.yaxis.set_major_formatter(matplotlib.ticker.FormatStrFormatter('%g%%'))
-
-
-fig1, ax = plt.subplots(figsize=(5.5, 3.8))
-plot_compactness(ax)
-ax.set_title('SSM Compactness')
-fig1.tight_layout()
-fig1.savefig('ssm_compactness.pdf'); fig1.savefig('ssm_compactness.png')
-print('[OK] ssm_compactness')
+_modes_dense  = np.arange(1, 25)
+_cumul_dense  = np.interp(_modes_dense, MODES_K, CUMUL_V)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 2 — Scree plot
+# FIG 1 — Compactness
 # ══════════════════════════════════════════════════════════════════════════════
-def plot_scree(ax):
-    colors = [BLUE if v >= 5 else LIGHT_BLUE for v in indiv_var]
-    bars = ax.bar(modes_10, indiv_var, color=colors, edgecolor='white',
-                  linewidth=0.5, width=0.75)
-    for bar, val in zip(bars, indiv_var):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
-                f'{val:.1f}%', ha='center', va='bottom', fontsize=7.5, color='#333333')
-    ax.set_xlabel('Mode')
-    ax.set_ylabel('Variance Explained (%)')
-    ax.set_xticks(modes_10)
-    ax.set_xlim(0.4, 10.6)
-    ax.grid(axis='y', linewidth=0.4, alpha=0.35, color=GREY)
-    legend_elems = [
-        mpatches.Patch(color=BLUE,       label='≥ 5%'),
-        mpatches.Patch(color=LIGHT_BLUE, label='< 5%'),
-    ]
-    ax.legend(handles=legend_elems, frameon=False, fontsize=8)
+fig, ax = plt.subplots(figsize=(5.0, 3.6))
 
+ax.plot(_modes_dense, _cumul_dense,
+        color=C_BLUE, linewidth=2.0, marker='o', markersize=4,
+        markerfacecolor='white', markeredgewidth=1.4, zorder=4,
+        label='Cumulative variance')
 
-fig2, ax = plt.subplots(figsize=(5.5, 3.8))
-plot_scree(ax)
-ax.set_title('Scree Plot — Individual Mode Variance')
-fig2.tight_layout()
-fig2.savefig('ssm_scree.pdf'); fig2.savefig('ssm_scree.png')
-print('[OK] ssm_scree')
+# Threshold reference lines
+ax.axhline(90, color=C_RED,    linestyle='--', linewidth=1.1, zorder=3,
+           label='90% (11 modes)')
+ax.axhline(95, color=C_ORANGE, linestyle=':',  linewidth=1.3, zorder=3,
+           label='95% (14 modes)')
+ax.axvline(11, color=C_RED,    linestyle='--', linewidth=0.8, alpha=0.45, zorder=2)
+ax.axvline(14, color=C_ORANGE, linestyle=':',  linewidth=1.0, alpha=0.45, zorder=2)
 
+# Annotations
+ax.text(11.3, 87.5, '11', fontsize=8, color=C_RED, va='top')
+ax.text(14.3, 92.5, '14', fontsize=8, color=C_ORANGE, va='top')
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 3 — Generalization (LOO per specimen)
-# ══════════════════════════════════════════════════════════════════════════════
-def plot_generalization(ax, fontsize_annot=8):
-    specimens = np.arange(1, N_SPECIMENS + 1)
-    colors = [RED if e > 1.0 else LIGHT_BLUE for e in gen_errors]
+ax.set_xlabel('Number of Modes')
+ax.set_ylabel('Cumulative Variance Explained (%)')
+ax.set_title('Compactness')
+ax.set_xlim(0.5, 24.5)
+ax.set_ylim(35, 104)
+ax.set_xticks([1, 5, 10, 15, 20, 24])
+ax.yaxis.set_major_formatter(ticker.FormatStrFormatter('%g'))
+ax.legend(frameon=False, loc='lower right')
 
-    ax.bar(specimens, gen_errors, color=colors, edgecolor='white',
-           linewidth=0.4, width=0.75, zorder=2)
-
-    ax.axhline(gen_mean, color='black', linestyle='-', linewidth=1.8,
-               label=f'Mean = {gen_mean:.3f} mm', zorder=3)
-    ax.axhline(gen_mean + gen_std, color=GREY, linestyle='--', linewidth=1.0,
-               label=f'Mean ± SD  (SD = {gen_std:.3f} mm)', zorder=3)
-    ax.axhline(gen_mean - gen_std, color=GREY, linestyle='--', linewidth=1.0, zorder=3)
-    ax.axhline(1.0, color=RED, linestyle=':', linewidth=1.0, alpha=0.7,
-               label='1 mm reference', zorder=3)
-
-    # Annotate max
-    worst = int(np.argmax(gen_errors))
-    ax.annotate(f'Max={gen_max:.3f} mm\n(sp.{worst+1})',
-                xy=(worst + 1, gen_max), xytext=(worst - 3, gen_max + 0.05),
-                fontsize=fontsize_annot, color=RED,
-                arrowprops=dict(arrowstyle='->', color=RED, lw=0.8))
-
-    ax.set_xlabel('Specimen')
-    ax.set_ylabel('LOO Reconstruction Error (mm)')
-    ax.set_xticks(specimens)
-    ax.set_xticklabels([str(i) for i in specimens], fontsize=7.5)
-    ax.set_ylim(0, gen_max * 1.25)
-    ax.grid(axis='y', linewidth=0.4, alpha=0.35, color=GREY)
-
-    legend_elems = [
-        mpatches.Patch(color=LIGHT_BLUE, label='< 1 mm'),
-        mpatches.Patch(color=RED,        label='≥ 1 mm'),
-        plt.Line2D([0],[0], color='black',  linewidth=1.8, label=f'Mean = {gen_mean:.3f} mm'),
-        plt.Line2D([0],[0], color=GREY,     linestyle='--', linewidth=1.0,
-                   label=f'± SD ({gen_std:.3f} mm)'),
-        plt.Line2D([0],[0], color=RED,      linestyle=':',  linewidth=1.0, label='1 mm ref.'),
-    ]
-    ax.legend(handles=legend_elems, frameon=False, loc='upper left',
-              ncol=2, fontsize=fontsize_annot)
-
-
-fig3, ax = plt.subplots(figsize=(8.0, 3.8))
-plot_generalization(ax)
-ax.set_title('SSM Generalization — Leave-One-Out Reconstruction Error')
-fig3.tight_layout()
-fig3.savefig('ssm_generalization.pdf'); fig3.savefig('ssm_generalization.png')
-print('[OK] ssm_generalization')
+plt.tight_layout()
+plt.savefig('ssm_fig1_compactness.pdf')
+plt.savefig('ssm_fig1_compactness.png')
+plt.close()
+print('[saved] ssm_fig1_compactness')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 4 — Mode shape amplitudes (σ per mode)
+# FIG 2 — Generalization  (bar chart + box inset)
 # ══════════════════════════════════════════════════════════════════════════════
-fig4, (ax4a, ax4b) = plt.subplots(1, 2, figsize=(9, 3.8))
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.8),
+                          gridspec_kw={'width_ratios': [3, 1], 'wspace': 0.25})
 
-# Left: shape-space σ (mm)
-ax4a.bar(modes_10, sigma_shape, color=BLUE, edgecolor='white', linewidth=0.5, width=0.75)
-ax4a.set_xlabel('Mode')
-ax4a.set_ylabel('Shape-space σ (mm)')
-ax4a.set_title('(a) Shape-Space Standard Deviation per Mode')
-ax4a.set_xticks(modes_10)
-ax4a.grid(axis='y', linewidth=0.4, alpha=0.35, color=GREY)
-for i, (bar, val) in enumerate(zip(ax4a.patches, sigma_shape)):
-    ax4a.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
-              f'{val:.0f}', ha='center', va='bottom', fontsize=7.5)
+# ── Left: per-specimen bars ──────────────────────────────────────────────────
+ax = axes[0]
+bar_colors = [C_RED if e > 1.0 else C_BLUE for e in GEN]
+ax.bar(SPEC_IDS, GEN, color=bar_colors, edgecolor='white',
+       linewidth=0.4, width=0.75, zorder=3)
 
-# Right: per-vertex mean displacement
-ax4b.bar(modes_10, sigma_vertex, color=LIGHT_BLUE, edgecolor='white', linewidth=0.5, width=0.75)
-ax4b.set_xlabel('Mode')
-ax4b.set_ylabel('Mean Vertex Displacement per 1σ (mm)')
-ax4b.set_title('(b) Per-Vertex Shape Variation per Mode')
-ax4b.set_xticks(modes_10)
-ax4b.grid(axis='y', linewidth=0.4, alpha=0.35, color=GREY)
-for i, (bar, val) in enumerate(zip(ax4b.patches, sigma_vertex)):
-    ax4b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-              f'{val:.2f}', ha='center', va='bottom', fontsize=7.5)
+mean_v = GEN.mean();  std_v = GEN.std()
+ax.axhline(mean_v, color='black', linewidth=1.6, zorder=4,
+           label=f'Mean = {mean_v:.3f} mm')
+ax.axhline(mean_v + std_v, color=C_GREY, linestyle='--', linewidth=1.0, zorder=4,
+           label=f'± SD ({std_v:.3f} mm)')
+ax.axhline(mean_v - std_v, color=C_GREY, linestyle='--', linewidth=1.0, zorder=4)
+ax.axhline(1.0, color=C_RED, linestyle=':', linewidth=1.0, alpha=0.7, zorder=4,
+           label='1 mm reference')
 
-fig4.tight_layout()
-fig4.savefig('ssm_modes_sigma.pdf'); fig4.savefig('ssm_modes_sigma.png')
-print('[OK] ssm_modes_sigma')
+ax.set_xlabel('Specimen')
+ax.set_ylabel('Reconstruction Error (mm)')
+ax.set_title('Generalization — Leave-One-Out Error')
+ax.set_xticks(SPEC_IDS)
+ax.set_xticklabels([str(i) for i in SPEC_IDS], fontsize=7.5)
+ax.set_ylim(0, GEN.max() * 1.30)
+ax.legend(frameon=False, loc='upper left', ncol=2, fontsize=8)
+
+# Color legend patches
+from matplotlib.patches import Patch
+ax.legend(
+    handles=[
+        Patch(color=C_BLUE, label='Error < 1 mm'),
+        Patch(color=C_RED,  label='Error ≥ 1 mm'),
+        plt.Line2D([0],[0], color='black', lw=1.6, label=f'Mean = {mean_v:.3f} mm'),
+        plt.Line2D([0],[0], color=C_GREY, lw=1.0, ls='--',
+                   label=f'Mean ± SD  (SD={std_v:.3f} mm)'),
+        plt.Line2D([0],[0], color=C_RED, lw=1.0, ls=':', label='1 mm reference'),
+    ],
+    frameon=False, loc='upper left', ncol=2, fontsize=8
+)
+
+# ── Right: box plot summary ───────────────────────────────────────────────────
+ax2 = axes[1]
+bp = ax2.boxplot(GEN, patch_artist=True, widths=0.45,
+                 medianprops=dict(color='white', linewidth=2),
+                 boxprops=dict(facecolor=C_LBLUE, edgecolor=C_BLUE, linewidth=1.0),
+                 whiskerprops=dict(color=C_BLUE, linewidth=1.0),
+                 capprops=dict(color=C_BLUE, linewidth=1.0),
+                 flierprops=dict(marker='o', markerfacecolor=C_RED,
+                                 markeredgecolor=C_RED, markersize=5))
+
+ax2.axhline(mean_v, color='black', linewidth=1.4, linestyle='--', zorder=5,
+            label=f'Mean={mean_v:.2f}')
+ax2.set_ylabel('Reconstruction Error (mm)')
+ax2.set_title('Distribution')
+ax2.set_xticks([])
+ax2.set_xlim(0.3, 1.7)
+
+# Annotate statistics
+stats_txt = (f'Mean={mean_v:.3f}\n'
+             f'SD  ={std_v:.3f}\n'
+             f'Max ={GEN.max():.3f}\n'
+             f'Min ={GEN.min():.3f}')
+ax2.text(1.55, GEN.max() * 1.05, stats_txt, fontsize=7.5,
+         va='top', ha='right', color='#333333',
+         bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                   edgecolor='#CCCCCC', linewidth=0.6))
+
+plt.tight_layout()
+plt.savefig('ssm_fig2_generalization.pdf')
+plt.savefig('ssm_fig2_generalization.png')
+plt.close()
+print('[saved] ssm_fig2_generalization')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 5 — Combined validation figure (research paper main figure)
+# FIG 3 — Scree + per-vertex displacement
 # ══════════════════════════════════════════════════════════════════════════════
-fig5 = plt.figure(figsize=(12, 8))
-gs = GridSpec(2, 3, figure=fig5, hspace=0.50, wspace=0.38)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9.0, 3.8),
+                                gridspec_kw={'wspace': 0.35})
 
-# (a) Compactness
-ax5a = fig5.add_subplot(gs[0, :2])
-plot_compactness(ax5a, fontsize_annot=8)
-ax5a.set_title('(a) Compactness')
+# Left: variance % per mode
+ax1.bar(MODES_10, INDIV_V, color=C_BLUE, edgecolor='white',
+        linewidth=0.5, width=0.72, zorder=3)
+for i, (x, v) in enumerate(zip(MODES_10, INDIV_V)):
+    ax1.text(x, v + 0.4, f'{v:.1f}%', ha='center', va='bottom',
+             fontsize=7.5, color='#333333')
+ax1.set_xlabel('Mode')
+ax1.set_ylabel('Variance Explained (%)')
+ax1.set_title('(a)  Scree Plot')
+ax1.set_xticks(MODES_10)
+ax1.set_ylim(0, INDIV_V[0] * 1.18)
 
-# (b) Scree
-ax5b = fig5.add_subplot(gs[0, 2])
-plot_scree(ax5b)
-ax5b.set_title('(b) Scree Plot')
+# Right: per-vertex displacement per 1σ
+ax2.bar(MODES_10, SIGMA_VTEX, color=C_ORANGE, edgecolor='white',
+        linewidth=0.5, width=0.72, zorder=3)
+for i, (x, v) in enumerate(zip(MODES_10, SIGMA_VTEX)):
+    ax2.text(x, v + 0.01, f'{v:.2f}', ha='center', va='bottom',
+             fontsize=7.5, color='#333333')
+ax2.set_xlabel('Mode')
+ax2.set_ylabel('Mean Vertex Displacement per 1σ (mm)')
+ax2.set_title('(b)  Shape Variation Magnitude per Mode')
+ax2.set_xticks(MODES_10)
 
-# (c) Generalization
-ax5c = fig5.add_subplot(gs[1, :2])
-plot_generalization(ax5c, fontsize_annot=8)
-ax5c.set_title('(c) Generalization (Leave-One-Out)')
+plt.tight_layout()
+plt.savefig('ssm_fig3_scree.pdf')
+plt.savefig('ssm_fig3_scree.png')
+plt.close()
+print('[saved] ssm_fig3_scree')
 
-# (d) Summary table
-ax5d = fig5.add_subplot(gs[1, 2])
-ax5d.axis('off')
-ax5d.add_patch(mpatches.FancyBboxPatch(
-    (0.03, 0.02), 0.94, 0.96,
-    boxstyle='round,pad=0.01',
-    facecolor='#F5F5F5', edgecolor='#CCCCCC',
-    linewidth=0.8, transform=ax5d.transAxes, zorder=0))
 
+# ══════════════════════════════════════════════════════════════════════════════
+# FIG 4 — Combined (main paper figure, 2 × 2)
+# ══════════════════════════════════════════════════════════════════════════════
+fig = plt.figure(figsize=(11.0, 7.8))
+gs  = GridSpec(2, 3, figure=fig, hspace=0.48, wspace=0.38)
+
+# ── (a) Compactness ──────────────────────────────────────────────────────────
+ax_a = fig.add_subplot(gs[0, :2])
+ax_a.plot(_modes_dense, _cumul_dense,
+          color=C_BLUE, linewidth=2.0, marker='o', markersize=4.5,
+          markerfacecolor='white', markeredgewidth=1.4, zorder=4)
+ax_a.fill_between(_modes_dense, _cumul_dense, 35, alpha=0.08, color=C_BLUE)
+ax_a.axhline(90, color=C_RED,    linestyle='--', linewidth=1.1, zorder=3,
+             label='90% variance threshold (11 modes)')
+ax_a.axhline(95, color=C_ORANGE, linestyle=':',  linewidth=1.3, zorder=3,
+             label='95% variance threshold (14 modes)')
+ax_a.axvline(11, color=C_RED,    linestyle='--', linewidth=0.8, alpha=0.4, zorder=2)
+ax_a.axvline(14, color=C_ORANGE, linestyle=':',  linewidth=1.0, alpha=0.4, zorder=2)
+ax_a.text(11.4, 86.5, '11 modes', fontsize=8, color=C_RED)
+ax_a.text(14.4, 91.8, '14 modes', fontsize=8, color=C_ORANGE)
+ax_a.set_xlabel('Number of Modes')
+ax_a.set_ylabel('Cumulative Variance Explained (%)')
+ax_a.set_title('(a)  Compactness')
+ax_a.set_xlim(0.5, 24.5)
+ax_a.set_ylim(35, 106)
+ax_a.set_xticks([1, 5, 10, 15, 20, 24])
+ax_a.legend(frameon=False, loc='lower right', fontsize=8)
+
+# ── (b) Scree ────────────────────────────────────────────────────────────────
+ax_b = fig.add_subplot(gs[0, 2])
+ax_b.bar(MODES_10, INDIV_V, color=C_BLUE, edgecolor='white',
+         linewidth=0.4, width=0.72, zorder=3)
+for x, v in zip(MODES_10, INDIV_V):
+    ax_b.text(x, v + 0.4, f'{v:.1f}', ha='center', va='bottom', fontsize=7, color='#333333')
+ax_b.set_xlabel('Mode')
+ax_b.set_ylabel('Variance Explained (%)')
+ax_b.set_title('(b)  Scree Plot')
+ax_b.set_xticks(MODES_10)
+ax_b.set_ylim(0, INDIV_V[0] * 1.22)
+
+# ── (c) Generalization bars ───────────────────────────────────────────────────
+ax_c = fig.add_subplot(gs[1, :2])
+bar_colors = [C_RED if e > 1.0 else C_BLUE for e in GEN]
+ax_c.bar(SPEC_IDS, GEN, color=bar_colors, edgecolor='white',
+         linewidth=0.3, width=0.75, zorder=3)
+ax_c.axhline(mean_v, color='black', linewidth=1.6, zorder=4)
+ax_c.axhline(mean_v + std_v, color=C_GREY, linestyle='--', linewidth=0.9, zorder=4)
+ax_c.axhline(mean_v - std_v, color=C_GREY, linestyle='--', linewidth=0.9, zorder=4)
+ax_c.axhline(1.0, color=C_RED, linestyle=':', linewidth=1.0, alpha=0.6, zorder=4)
+ax_c.text(24.6, mean_v,       f'{mean_v:.2f}', fontsize=7.5, va='center', color='black')
+ax_c.text(24.6, mean_v+std_v, f'+SD',           fontsize=7,   va='center', color=C_GREY)
+ax_c.text(24.6, 1.0,          '1 mm',           fontsize=7,   va='center', color=C_RED)
+ax_c.set_xlabel('Specimen')
+ax_c.set_ylabel('LOO Reconstruction Error (mm)')
+ax_c.set_title('(c)  Generalization — Leave-One-Out Error per Specimen')
+ax_c.set_xticks(SPEC_IDS)
+ax_c.set_xticklabels([str(i) for i in SPEC_IDS], fontsize=7.5)
+ax_c.set_xlim(0.3, 25.5)
+ax_c.set_ylim(0, GEN.max() * 1.30)
+ax_c.legend(
+    handles=[Patch(color=C_BLUE, label='< 1 mm'), Patch(color=C_RED, label='≥ 1 mm')],
+    frameon=False, loc='upper left', fontsize=8
+)
+
+# ── (d) Summary panel ────────────────────────────────────────────────────────
+ax_d = fig.add_subplot(gs[1, 2])
+ax_d.axis('off')
+
+# Draw summary table manually
 rows = [
-    ('Dataset', None),
-    ('  Specimens (N)', '24'),
-    ('  Subjects', '12 (paired L/R)'),
-    ('  Vertices (ref)', '8,001'),
-    ('  SSM rank', '24'),
-    ('', None),
-    ('Compactness', None),
-    ('  Modes @ 90% var.', '11'),
-    ('  Modes @ 95% var.', '14'),
-    ('  Mode 1 variance', '46.60%'),
-    ('', None),
-    ('Generalization (LOO)', None),
-    ('  Mean error', f'{gen_mean:.3f} mm'),
-    ('  SD', f'{gen_std:.3f} mm'),
-    ('  Max error', f'{gen_max:.3f} mm'),
-    ('', None),
-    ('Specificity', None),
-    ('  Mean (50 samples)', f'{specificity_mean:.3f} mm'),
+    ('DATASET',           None,                True),
+    ('Specimens (N)',      '24',               False),
+    ('Subjects',          '12 paired L/R',     False),
+    ('Vertices (ref)',    '8,001',             False),
+    ('SSM rank',          '24',               False),
+    ('',                  None,               False),
+    ('COMPACTNESS',       None,                True),
+    ('Mode 1 variance',   '46.60 %',          False),
+    ('Modes @ 90 %',      '11',               False),
+    ('Modes @ 95 %',      '14',               False),
+    ('',                  None,               False),
+    ('GENERALIZATION',    None,                True),
+    ('Mean LOO error',    f'{mean_v:.3f} mm', False),
+    ('SD',                f'{std_v:.3f} mm',  False),
+    ('Max LOO error',     f'{GEN.max():.3f} mm', False),
+    ('',                  None,               False),
+    ('SPECIFICITY',       None,                True),
+    ('Mean (50 samples)', f'{SPEC:.3f} mm',   False),
 ]
 
-y = 0.96
-for label, val in rows:
+y = 0.97
+dy_header = 0.062
+dy_row    = 0.053
+for label, val, is_hdr in rows:
     if not label:
-        y -= 0.032; continue
-    is_header = (val is None)
-    weight = 'bold' if is_header else 'normal'
-    color  = BLUE    if is_header else '#222222'
-    ax5d.text(0.06, y, label, transform=ax5d.transAxes,
-              fontsize=9, fontweight=weight, color=color, va='top')
-    if val is not None:
-        ax5d.text(0.96, y, val, transform=ax5d.transAxes,
-                  fontsize=9, ha='right', va='top', color='#222222')
-    y -= 0.055 if is_header else 0.052
+        y -= 0.025; continue
+    fw  = 'bold' if is_hdr else 'normal'
+    clr = C_BLUE  if is_hdr else '#222222'
+    ax_d.text(0.05, y, label, transform=ax_d.transAxes,
+              fontsize=9 if is_hdr else 8.5,
+              fontweight=fw, color=clr, va='top')
+    if val:
+        ax_d.text(0.97, y, val, transform=ax_d.transAxes,
+                  fontsize=8.5, ha='right', va='top', color='#111111')
+    y -= dy_header if is_hdr else dy_row
 
-ax5d.set_title('(d) Validation Summary', pad=5)
+# Border
+from matplotlib.patches import FancyBboxPatch
+ax_d.add_patch(FancyBboxPatch(
+    (0.02, 0.01), 0.96, 0.97,
+    boxstyle='round,pad=0.01', transform=ax_d.transAxes,
+    facecolor='#FAFAFA', edgecolor='#CCCCCC', linewidth=0.8, zorder=0))
+ax_d.set_title('(d)  Validation Summary', pad=6)
 
-fig5.savefig('ssm_validation_combined.pdf')
-fig5.savefig('ssm_validation_combined.png', dpi=300)
-print('[OK] ssm_validation_combined')
+plt.savefig('ssm_fig4_combined.pdf')
+plt.savefig('ssm_fig4_combined.png', dpi=300)
+plt.close()
+print('[saved] ssm_fig4_combined')
 
-print('\nAll plots saved. Files:')
-for f in ['ssm_compactness', 'ssm_scree', 'ssm_generalization',
-          'ssm_modes_sigma', 'ssm_validation_combined']:
+print('\nDone. Output files:')
+for f in ['ssm_fig1_compactness', 'ssm_fig2_generalization',
+          'ssm_fig3_scree', 'ssm_fig4_combined']:
     print(f'  {f}.pdf   {f}.png')
