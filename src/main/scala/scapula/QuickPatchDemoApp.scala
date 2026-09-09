@@ -101,14 +101,14 @@ object QuickPatchDemoApp {
       viz(ui, g1, m, s.id)
     }
 
-    // G2: Best match overlaid (maximum Z-fighting)
-    val bestIdx = registered.indices.minBy { i =>
+    // G2: Cross-subject (worst match) — shows small patch artifacts from local kernel failure
+    val worstIdx = registered.indices.maxBy { i =>
       val d = Metrics.surfaceDistances(registered(i), decRef)
       d.sum / d.length
     }
-    val g2 = ui.createGroup(s"G2 Best match overlaid: ${rigidAligned(bestIdx).id}")
-    viz(ui, g2, decRef, "reference")
-    viz(ui, g2, registered(bestIdx), "registered_best")
+    val g2 = ui.createGroup(s"G2 Cross-subject patches: ${rigidAligned(worstIdx).id}")
+    viz(ui, g2, decRef,                "reference_white")
+    viz(ui, g2, registered(worstIdx),  "registered_cross_subject")
 
     // G3: Before vs after NR for first specimen
     val g3 = ui.createGroup(s"G3 Before/After NR: ${rigidAligned.head.id}")
