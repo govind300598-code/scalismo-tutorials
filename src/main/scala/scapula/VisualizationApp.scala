@@ -10,11 +10,25 @@ import scalismo.utils.Random
 
 object VisualizationApp {
 
-  // Every ui.show wrapped — VTK errors are non-fatal
+  // Hide a view (or Seq of views) via reflection — works for any Scalismo view type
+  private def hideReflect(v: Any): Unit = {
+    if (v == null) return
+    v match {
+      case seq: Seq[_] => seq.foreach(hideReflect)
+      case _ =>
+        try { v.getClass.getMethod("visible_$eq", classOf[Boolean]).invoke(v, java.lang.Boolean.FALSE) }
+        catch { case _: Exception => () }
+    }
+  }
+
+  // Every ui.show wrapped — VTK errors are non-fatal; all items start HIDDEN
   private def viz[A](ui: ScalismoUI, grp: scalismo.ui.api.Group, obj: A, name: String)(
     implicit ev: scalismo.ui.api.ShowInScene[A]
-  ): Unit = try { ui.show(grp, obj, name); Thread.sleep(15) }
-  catch { case e: Exception => println(s"  [warn] '$name': ${e.getMessage}") }
+  ): Unit = try {
+    val v = ui.show(grp, obj, name)
+    Thread.sleep(15)
+    hideReflect(v)
+  } catch { case e: Exception => println(s"  [warn] '$name': ${e.getMessage}") }
 
   // Deformation field: pointwise displacement from reference to warped mesh
   private def defField(ref: TriangleMesh[_3D], warped: TriangleMesh[_3D])
