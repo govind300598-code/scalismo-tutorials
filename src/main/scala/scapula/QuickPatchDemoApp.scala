@@ -145,7 +145,7 @@ object QuickPatchDemoApp {
 
     val targetOps = target.operations
     var current   = reference
-    for (_ <- 0 until Config.gpIcpIter) {   // full 8 iterations — needed for close overlap / Z-fighting
+    for (_ <- 0 until 40) {   // 40 iterations — tight convergence for dense Z-fighting patches
       val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
         (id, targetOps.closestPointOnSurface(pt).point)
       }.toIndexedSeq
