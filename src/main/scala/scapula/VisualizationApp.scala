@@ -242,6 +242,19 @@ object VisualizationApp {
     val g17 = ui.createGroup("G17 Model Samples (5 random instances)")
     (1 to 5).foreach(i => viz(ui, g17, ssm.sample(), s"sample_$i"))
 
+    // ── G18: Z-fighting demo — reference + best-registered overlaid ───────────
+    // Shows reference (white) and the same-subject registered mesh (red) at
+    // IDENTICAL coordinates → surfaces < 1 mm apart → OpenGL Z-fighting
+    // (the dramatic scattered red/white patch pattern that means perfect overlap)
+    val bestIdx = registered.indices.minBy { i =>
+      val d = Metrics.surfaceDistances(registered(i), decRef)
+      d.sum / d.length
+    }
+    val bestId  = rigidAligned(bestIdx).id
+    val g18 = ui.createGroup(s"G18 Z-fighting Demo — ref + $bestId registered (best match)")
+    viz(ui, g18, decRef,              "reference_white")
+    viz(ui, g18, registered(bestIdx), "registered_red")
+
     println("\n[info] All groups loaded. Groups in left panel:")
     println("[info]  G00 Input Meshes         — raw unaligned bones")
     println("[info]  G01 Landmarks             — 5 anatomical landmarks per specimen")
@@ -259,6 +272,7 @@ object VisualizationApp {
     println("[info]  G15 Eigenvector Field     — mode 1 as displacement field")
     println("[info]  G16 SSM Interactive       — drag sliders to explore model")
     println("[info]  G17 Model Samples         — 5 random SSM instances")
+    println(s"[info]  G18 Z-fighting Demo       — ref + $bestId (best-match registered) overlaid")
     println("[info] Close viewer window to exit.")
   }
 }
