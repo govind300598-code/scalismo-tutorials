@@ -18,7 +18,7 @@ object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"))
+  val outDir: File = new File(env("SCAPULA_OUT_DIR", "scapula_output"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
