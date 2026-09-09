@@ -53,9 +53,11 @@ object QuickPatchDemoApp {
     val ref = all.find(s => s.id.contains("002") && !s.id.endsWith("_mir")).getOrElse(all.head)
     println(s"[info] Reference: ${ref.id}")
 
-    // Pick 5 specimens (skip the reference itself)
-    val N = 5
-    val targets = all.filterNot(_.id == ref.id).take(N)
+    // Pick 2 specimens: same-person mirror first (best match → most Z-fighting patches)
+    val N = 2
+    val samePersonMirror = all.find(s => s.id.contains("002") && s.id.endsWith("_mir"))
+    val others = all.filterNot(s => s.id == ref.id || s.id == samePersonMirror.map(_.id).getOrElse(""))
+    val targets = (samePersonMirror.toSeq ++ others).take(N).toIndexedSeq
     println(s"[info] Targets: ${targets.map(_.id).mkString(", ")}")
 
     // Rigid alignment
@@ -143,7 +145,7 @@ object QuickPatchDemoApp {
 
     val targetOps = target.operations
     var current   = reference
-    for (_ <- 0 until 3) {   // 3 iterations only
+    for (_ <- 0 until Config.gpIcpIter) {   // full 8 iterations — needed for close overlap / Z-fighting
       val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
         (id, targetOps.closestPointOnSurface(pt).point)
       }.toIndexedSeq
