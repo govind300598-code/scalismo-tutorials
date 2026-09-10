@@ -7,18 +7,23 @@ import scalismo.utils.Random
 
 /**
  * Reproduces the small scattered patch pattern from the original S05 screenshot.
- * Uses original parameters: modelResolution=8000, gpBasis=100, gpIcpIter=10
- * Reference = 002_M_56_L, Target = 002_M_56_R_mirrored (same person, mirrored)
+ * KEY INSIGHT: fine patches come from MULTIPLE meshes (5+) all overlaid simultaneously.
+ * With only 2 meshes you always get large blobs — you need many surfaces competing
+ * for the z-buffer at once to produce the fine mosaic pattern.
+ *
+ * Original parameters: modelResolution=8000, gpBasis=100, gpIcpIter=10, icpIter=40
+ * Reference = 002_M_56_L, Targets = first 5 available specimens
  */
 object QuickPatchDemoApp {
 
-  // Original parameters that produced the old S05 screenshot
-  private val MESH_RES  = 8000   // dense reference — key for fine patches
-  private val GP_BASIS  = 100    // original gpBasis
-  private val GP_SIGMA  = 13.0   // original gpSigma (mm)
-  private val GP_SCALE  = 30.0   // original gpScale
-  private val GP_NOISE  = 1.0    // original gpNoise
-  private val NR_ITER   = 10     // original gpIcpIter
+  // Original S05 parameters
+  private val MESH_RES = 8000
+  private val GP_BASIS = 100
+  private val GP_SIGMA = 13.0
+  private val GP_SCALE = 30.0
+  private val GP_NOISE = 1.0
+  private val NR_ITER  = 10
+  private val N        = 5    // need 5+ specimens to get fine scattered patches
 
   private def hideReflect(v: Any): Unit = {
     if (v == null) return
@@ -57,33 +62,34 @@ object QuickPatchDemoApp {
         else           Spec(s.modelId, raw, lms)
       }
 
-    // Reference = 002_M_56_L — same as original S05 screenshot
+    // Reference = 002_M_56_L  (same as original S05)
     val ref = all.find(s => s.id.contains("002") && !s.id.endsWith("_mir")).getOrElse(all.head)
     println(s"[info] Reference: ${ref.id}")
 
-    // Target = 002_M_56_R_mirrored — same person, mirrored (shown selected in old screenshot)
-    val target = all.find(s => s.id.contains("002") && s.id.endsWith("_mir")).toSeq.toIndexedSeq
-    println(s"[info] Target: ${target.map(_.id).mkString(", ")}")
+    // Take 5 specimens (excluding reference) — need multiple to get fine patches
+    val targets = all.filterNot(_.id == ref.id).take(N)
+    println(s"[info] Targets (${targets.length}): ${targets.map(_.id).mkString(", ")}")
 
     // Rigid alignment
-    println("[step] Rigid alignment...")
-    val rigidAligned = target.map { s =>
-      val t  = ScapulaData.rigidFromLandmarks(s.lms, ref.lms)
-      val m1 = s.mesh.transform(t)
+    println("[step] Rigid alignment (Procrustes + ICP)...")
+    val rigidAligned = targets.zipWithIndex.map { case (s, i) =>
+      print(s"  ICP ${i+1}/$N  ${s.id}\r")
+      val t    = ScapulaData.rigidFromLandmarks(s.lms, ref.lms)
+      val m1   = s.mesh.transform(t)
       val lms1 = s.lms.map(lm => lm.copy(point = t(lm.point)))
-      val m2 = RigidAlign.rigidIcp(m1, ref.mesh, 40)   // original icpIterations=40
+      val m2   = RigidAlign.rigidIcp(m1, ref.mesh, 40)
       s.copy(mesh = m2, lms = lms1)
     }
-    println("[step] Rigid alignment done.")
+    println(s"\n[step] Rigid alignment done.")
 
-    // Decimate reference to original 8000 pts
+    // Dense reference (8000 pts — original value)
     val decRef = ref.mesh.operations.decimate(MESH_RES)
-    println(s"[info] Decimated reference: ${decRef.pointSet.numberOfPoints} pts (target $MESH_RES)")
+    println(s"[info] Decimated reference: ${decRef.pointSet.numberOfPoints} pts")
 
-    // NR with original parameters
-    println(s"[step] Non-rigid registration ($NR_ITER iterations, gpBasis=$GP_BASIS, sigma=${GP_SIGMA}mm)...")
-    val registered = rigidAligned.zipWithIndex.map { case (s, i) =>
-      print(s"  NR ${i+1}/${rigidAligned.length}  ${s.id}\r")
+    // Non-rigid registration with original parameters
+    println(s"[step] Non-rigid registration ($N specimens, $NR_ITER iterations each)...")
+    val registered: IndexedSeq[TriangleMesh[_3D]] = rigidAligned.zipWithIndex.map { case (s, i) =>
+      print(s"  NR ${i+1}/$N  ${s.id}\r")
       val result = registerOriginal(decRef, s.mesh)
       result
     }
@@ -91,41 +97,49 @@ object QuickPatchDemoApp {
 
     // Open viewer
     println("[UI] Opening viewer...")
-    val ui = ScalismoUI(s"Patch Demo — 002 ref + 002_R_mir (original params)")
+    val ui = ScalismoUI("Patch Demo — 5 specimens overlaid (original params)")
     Thread.sleep(1500)
 
     // G0: Reference alone
     val g0 = ui.createGroup("G0 Reference (002_M_56_L)")
     viz(ui, g0, decRef, "reference")
 
-    // G1: The patch pattern — reference (white) + registered (red) overlaid
-    val g1 = ui.createGroup(s"G1 PATCHES: ref(002_L white) + registered(${rigidAligned.head.id} red)")
+    // G1: ALL 5 registered + reference overlaid → fine scattered patches
+    // Click any mesh in the left panel to highlight it red → see fine patches against white
+    val g1 = ui.createGroup("G1 PATCHES: reference + all 5 registered overlaid — click a mesh to see patches")
     viz(ui, g1, decRef, "reference_white")
-    viz(ui, g1, registered.head, rigidAligned.head.id + "_red")
+    registered.zip(rigidAligned).foreach { case (m, s) =>
+      viz(ui, g1, m, s.id)
+    }
 
-    // G2: Before vs after NR
-    val g2 = ui.createGroup(s"G2 Before/After NR: ${rigidAligned.head.id}")
-    viz(ui, g2, rigidAligned.head.mesh, "before_NR")
-    viz(ui, g2, registered.head,        "after_NR")
-    viz(ui, g2, decRef,                 "reference")
+    // G2: Before vs After NR for one specimen (002_R_mir or first available)
+    val demoIdx = rigidAligned.indexWhere(_.id.contains("002") && _.id.endsWith("_mir"))
+                              .max(0)
+    val g2 = ui.createGroup(s"G2 Before/After NR: ${rigidAligned(demoIdx).id}")
+    viz(ui, g2, rigidAligned(demoIdx).mesh, "before_NR")
+    viz(ui, g2, registered(demoIdx),        "after_NR")
+    viz(ui, g2, decRef,                     "reference")
 
-    // G3: Target rigid-aligned alone
-    val g3 = ui.createGroup(s"G3 Target rigid-aligned: ${rigidAligned.head.id}")
-    viz(ui, g3, rigidAligned.head.mesh, rigidAligned.head.id)
+    // G3: All rigid-aligned (before NR)
+    val g3 = ui.createGroup("G3 All rigid-aligned (before NR)")
+    rigidAligned.foreach(s => viz(ui, g3, s.mesh, s.id))
 
-    println("\n[info] Parameters used (original S05 values):")
-    println(s"[info]   gpSigma=$GP_SIGMA mm  gpScale=$GP_SCALE  gpBasis=$GP_BASIS")
-    println(s"[info]   gpNoise=$GP_NOISE  NR iterations=$NR_ITER  meshRes=$MESH_RES")
-    println(s"[info]   Reference: ${ref.id}  Target: ${rigidAligned.head.id}")
-    println("[info] Groups:")
-    println("[info]  G0  Reference alone")
-    println(s"[info]  G1  PATCHES — turn this on to see the scattered patch pattern")
-    println("[info]  G2  Before/After NR")
-    println("[info]  G3  Target rigid-aligned")
+    println("\n[info] Parameters (original S05):")
+    println(s"[info]   meshRes=$MESH_RES  gpBasis=$GP_BASIS  sigma=${GP_SIGMA}mm  scale=$GP_SCALE")
+    println(s"[info]   gpNoise=$GP_NOISE  NR iter=$NR_ITER  rigid ICP=40")
+    println(s"[info]   Reference: ${ref.id}")
+    println(s"[info]   Targets: ${rigidAligned.map(_.id).mkString(", ")}")
+    println("[info] ─────────────────────────────────────────────────────")
+    println("[info] HOW TO SEE THE PATCHES:")
+    println("[info]   1. Click G1 to expand it")
+    println("[info]   2. Turn ON all meshes (eye icon next to each)")
+    println("[info]   3. Click on any specimen name in the left panel")
+    println("[info]      → it turns RED against the white meshes")
+    println("[info]      → fine scattered patch pattern appears")
+    println("[info] ─────────────────────────────────────────────────────")
     println("[info] Close window to exit.")
   }
 
-  // Registration using exact original S05 parameters
   private def registerOriginal(
     reference: TriangleMesh[_3D],
     target:    TriangleMesh[_3D]
