@@ -113,7 +113,7 @@ object QuickPatchDemoApp {
     }
 
     // G2: Before vs After NR for one specimen (002_R_mir or first available)
-    val demoIdx = rigidAligned.indexWhere(_.id.contains("002") && _.id.endsWith("_mir"))
+    val demoIdx = rigidAligned.indexWhere(s => s.id.contains("002") && s.id.endsWith("_mir"))
                               .max(0)
     val g2 = ui.createGroup(s"G2 Before/After NR: ${rigidAligned(demoIdx).id}")
     viz(ui, g2, rigidAligned(demoIdx).mesh, "before_NR")
