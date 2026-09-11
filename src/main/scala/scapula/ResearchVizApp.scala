@@ -141,10 +141,11 @@ object ResearchVizApp {
     println("-" * 90)
 
     val rows = targets.zip(registered).map { case (s, reg) =>
-      val st    = Metrics.symmetric(reg, decRef)
-      // Chamfer = mean of one-directional mean distances (standard definition)
-      val d1    = Metrics.surfaceDistances(reg, decRef)
-      val d2    = Metrics.surfaceDistances(decRef, reg)
+      // Correct metric: registered surface vs TARGET (how well NR fits the target)
+      // NOT vs reference (which only measures deformation magnitude)
+      val st    = Metrics.symmetric(reg, s.mesh)
+      val d1    = Metrics.surfaceDistances(reg, s.mesh)
+      val d2    = Metrics.surfaceDistances(s.mesh, reg)
       val chamf = (d1.sum / d1.length + d2.sum / d2.length) / 2.0
       (s.id, st.rms, st.hd95, chamf)
     }
