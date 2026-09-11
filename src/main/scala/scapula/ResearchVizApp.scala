@@ -29,15 +29,22 @@ import scalismo.utils.Random
  */
 object ResearchVizApp {
 
-  // ── ORIGINAL S05 PARAMETERS ────────────────────────────────────────────────
+  // ── REGISTRATION PARAMETERS ───────────────────────────────────────────────
   private val MESH_RES  = 8000
-  private val GP_BASIS  = 100
-  private val GP_SIGMA  = 13.0   // mm  (≈ glenoid-fossa radius)
-  private val GP_SCALE  = 30.0   // amplitude → RMS deformation √30 ≈ 5.5 mm
-  private val GP_NOISE  = 1.0
-  private val NR_ITER   = 10
   private val ICP_ITER  = 40
   private val N_SELECT  = 5      // number of most-diverse specimens
+
+  // Multi-scale GP-ICP stages: (sigma_mm, scale, noise, iterations)
+  // Stage 1 (coarse): large sigma=20mm captures global shape difference
+  // Stage 2 (medium): sigma=13mm (original S05) for mid-range details
+  // Stage 3 (fine):   sigma=7mm for local surface fitting
+  // gpNoise=0.1 (was 1.0): trust ICP correspondences 10× more → faster convergence
+  private val GP_BASIS  = 100
+  private val GP_STAGES: IndexedSeq[(Double, Double, Double, Int)] = IndexedSeq(
+    (20.0, 50.0, 0.5, 10),   // coarse:  global shape
+    (13.0, 30.0, 0.2, 15),   // medium:  original S05 sigma, tighter noise
+    ( 7.0, 15.0, 0.1, 15)    // fine:    local surface details
+  )
 
   // ── tiny reflection helper ─────────────────────────────────────────────────
   private def setVisible(v: Any, on: Boolean): Unit = v match {
@@ -130,7 +137,8 @@ object ResearchVizApp {
     }
 
     // ── Non-rigid GP-ICP registration ────────────────────────────────────────
-    println(s"[step 5/5] Non-rigid registration ($NR_ITER GP-ICP iterations, original S05 params)...")
+    val totalIter = GP_STAGES.map(_._4).sum
+    println(s"[step 5/5] Multi-scale non-rigid registration ($totalIter total GP-ICP iterations across ${GP_STAGES.length} stages)...")
     val registered: IndexedSeq[TriangleMesh[_3D]] = targets.zipWithIndex.map { case (s, i) =>
       print(s"  NR ${i+1}/${targets.length}  ${s.id}\r")
       val r = gpIcpRegister(decRef, s.mesh)
@@ -187,15 +195,15 @@ object ResearchVizApp {
     }
 
     // ── Parameter summary ─────────────────────────────────────────────────────
-    println("\n[info] ══ Parameters (original S05 values) ══")
+    println("\n[info] ══ Parameters ══")
     println(s"[info]   Reference:        ${ref.id}")
     println(s"[info]   modelResolution:  $MESH_RES pts")
     println(s"[info]   rigid ICP iter:   $ICP_ITER")
-    println(s"[info]   gpSigma:          ${GP_SIGMA} mm  (≈ glenoid-fossa radius)")
-    println(s"[info]   gpScale:          $GP_SCALE        (√scale ≈ ${f"${math.sqrt(GP_SCALE)}%.1f"} mm RMS deformation)")
     println(s"[info]   gpBasis:          $GP_BASIS  (Nyström rank)")
-    println(s"[info]   gpNoise:          $GP_NOISE")
-    println(s"[info]   NR iterations:    $NR_ITER")
+    println(s"[info]   Multi-scale GP stages (sigma_mm, scale, noise, iterations):")
+    GP_STAGES.zipWithIndex.foreach { case ((sig, sc, n, it), i) =>
+      println(f"[info]     Stage ${i+1}: σ=$sig%.0fmm  scale=$sc%.0f  noise=$n%.2f  iter=$it")
+    }
     println(s"[info]   Selected:         ${targets.map(_.id).mkString(", ")}")
     println("[info] ══════════════════════════════════════")
     println("[info]")
@@ -211,27 +219,36 @@ object ResearchVizApp {
     println("[info] Close window to exit.")
   }
 
-  // ── GP-ICP non-rigid registration (original S05 params) ───────────────────
+  // ── Multi-scale GP-ICP non-rigid registration ─────────────────────────────
+  // Each stage uses a different Gaussian kernel (sigma, scale, noise, nIter).
+  // Coarse → medium → fine: global shape first, then local surface details.
+  // gpNoise=0.1 trusts ICP correspondences 10× more than the original 1.0.
   private def gpIcpRegister(
     reference: TriangleMesh[_3D],
     target:    TriangleMesh[_3D]
   )(implicit rng: Random): TriangleMesh[_3D] = {
-    val scalarKernel = GaussianKernel[_3D](GP_SIGMA) * GP_SCALE
-    val kernel       = DiagonalKernel(scalarKernel, 3)
-    val zeroMean     = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
-    val gp           = GaussianProcess(zeroMean, kernel)
-    val sampler      = UniformMeshSampler3D(reference, GP_BASIS * 10)
-    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, GP_BASIS)
-    val model        = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
-
+    val zeroMean  = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val targetOps = target.operations
     var current   = reference
-    for (_ <- 0 until NR_ITER) {
-      val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
-        (id, targetOps.closestPointOnSurface(pt).point)
-      }.toIndexedSeq
-      current = model.posterior(correspondences, GP_NOISE).mean
+
+    GP_STAGES.zipWithIndex.foreach { case ((sigma, scale, noise, nIter), stageIdx) =>
+      val scalarKernel = GaussianKernel[_3D](sigma) * scale
+      val kernel       = DiagonalKernel(scalarKernel, 3)
+      val gp           = GaussianProcess(zeroMean, kernel)
+      val sampler      = UniformMeshSampler3D(reference, GP_BASIS * 10)
+      val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, GP_BASIS)
+      val model        = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
+
+      for (it <- 0 until nIter) {
+        val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
+          (id, targetOps.closestPointOnSurface(pt).point)
+        }.toIndexedSeq
+        current = model.posterior(correspondences, noise).mean
+      }
+      val stageMsd = Metrics.symmetric(current, target).mean
+      print(s"  stage${stageIdx+1}(σ=${sigma}mm,n=$noise,${nIter}it) → MSD=${f"$stageMsd%.2f"}mm  ")
     }
+    println()
     current
   }
 
