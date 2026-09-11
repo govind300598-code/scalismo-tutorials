@@ -117,7 +117,7 @@ object ResearchVizApp {
 
     // ── Specimen selection ────────────────────────────────────────────────────
     println(s"[step 4/5] Selecting $N_SELECT specimens for kernel evaluation...")
-    val targets = scala.util.Random.shuffle(rigidAll.toList).take(N_SELECT).toIndexedSeq
+    val targets = new scala.util.Random(Config.seed).shuffle(rigidAll.toList).take(N_SELECT).toIndexedSeq
     println(s"[info] Specimens:")
     targets.zipWithIndex.foreach { case (s, i) =>
       println(s"  ${i+1}. ${s.id}")
