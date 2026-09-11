@@ -52,7 +52,7 @@ object ResearchVizApp {
   private val GP_SIGMA  = 20.0   // mm  ← grid-search winner
   private val GP_SCALE  = 10.0   // amplitude √10≈3.2mm RMS  ← grid-search winner
   private val GP_NOISE  = 0.01   // tight: trusts ICP correspondences strongly
-  private val NR_ITER   = 50
+  private val NR_ITER   = 30
 
   // ── tiny reflection helper ─────────────────────────────────────────────────
   private def setVisible(v: Any, on: Boolean): Unit = v match {
