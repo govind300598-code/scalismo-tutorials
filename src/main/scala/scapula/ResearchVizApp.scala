@@ -10,29 +10,26 @@ import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
 /**
- * Research-quality visualization for thesis / paper presentation.
+ * GP-Based Non-Rigid Registration of Scapular Surfaces.
  *
  * Pipeline:
- *   1. Rigid-align ALL available specimens to the reference (002_M_56_L).
- *   2. Select the 5 most MORPHOLOGICALLY DIVERSE specimens by greedy farthest-point
- *      selection in the symmetric-surface-distance matrix (maximises shape spread).
- *   3. Non-rigid GP-ICP registration of those 5 using ORIGINAL S05 parameters.
- *   4. Display four groups per specimen in the Scalismo UI:
- *        A. Non-registered surface (RED) vs reference (WHITE) — scatter / mismatch
- *        B. Registered surface (semi-transparent BLUE) vs reference (WHITE) — overlay
- *        C. Deformation field — arrows from reference vertices to registered positions
- *        D. Overlay of ALL registered meshes + reference — z-fighting patch pattern
- *
- * Original S05 parameters:
- *   modelResolution=8000  gpBasis=100  gpSigma=13.0 mm  gpScale=30.0
- *   gpNoise=1.0           NR-iter=10   rigid-ICP=40
+ *   1. Rigid-align all available specimens to the reference (002_M_56_L).
+ *   2. Select N_SELECT specimens for Gaussian kernel parameter evaluation.
+ *   3. Non-rigid GP-ICP registration using the grid-search optimal kernel
+ *      (σ=20mm, scale=10) identified from systematic parameter evaluation.
+ *   4. Display per-specimen groups in the Scalismo viewer:
+ *        A. Non-registered surface vs reference — shows shape mismatch before NR
+ *        B. Registered surface overlaid on reference — shows NR quality
+ *        C. Deformation field (arrows, reference → registered)
+ *        GD. All registered meshes + reference overlaid simultaneously
+ *   5. Print a formatted per-specimen error table (RMS, HD95, Chamfer).
  */
 object ResearchVizApp {
 
   // ── REGISTRATION PARAMETERS ───────────────────────────────────────────────
   private val MESH_RES  = 8000
   private val ICP_ITER  = 40
-  private val N_SELECT  = 2      // ← set to 2 for quick test, change to 5 for final
+  private val N_SELECT  = 5      // 5 random scapulae
 
   // Single Gaussian kernel — parameters selected by systematic grid search over
   // sigma ∈ {20,40,60,80,100,120,140} mm × scale ∈ {5,10,15} on 5 diverse scapulae.
@@ -118,33 +115,12 @@ object ResearchVizApp {
     }
     println(s"\n[info] Rigid alignment done.")
 
-    // ── Greedy farthest-point selection: maximise shape diversity ─────────────
-    // Use mean surface distance (MSD) as shape-distance proxy.
-    // MSD is symmetric: (d(A→B) + d(B→A)) / 2.
-    println(s"[step 4/5] Selecting $N_SELECT most morphologically diverse specimens...")
-
-    def msd(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double =
-      Metrics.symmetric(a, b).mean
-
-    // Start with the specimen farthest from the reference
-    val distToRef: IndexedSeq[Double] = rigidAll.map(s => msd(s.mesh, decRef))
-    val seed0 = distToRef.zipWithIndex.maxBy(_._1)._2
-
-    var selected = IndexedSeq(seed0)
-    while (selected.length < math.min(N_SELECT, rigidAll.length)) {
-      // For each candidate, find its min distance to any already-selected specimen
-      val nextIdx = rigidAll.indices
-        .filterNot(selected.contains)
-        .maxBy { i =>
-          selected.map(j => msd(rigidAll(i).mesh, rigidAll(j).mesh)).min
-        }
-      selected = selected :+ nextIdx
-    }
-
-    val targets = selected.map(rigidAll)
-    println(s"[info] Selected (most diverse):")
+    // ── Specimen selection ────────────────────────────────────────────────────
+    println(s"[step 4/5] Selecting $N_SELECT specimens for kernel evaluation...")
+    val targets = scala.util.Random.shuffle(rigidAll.toList).take(N_SELECT).toIndexedSeq
+    println(s"[info] Specimens:")
     targets.zipWithIndex.foreach { case (s, i) =>
-      println(f"  ${i+1}. ${s.id}  (MSD to ref = ${distToRef(selected(i))}%.2f mm)")
+      println(s"  ${i+1}. ${s.id}")
     }
 
     // ── Non-rigid GP-ICP registration ────────────────────────────────────────
@@ -156,20 +132,42 @@ object ResearchVizApp {
     }
     println(s"\n[info] Non-rigid registration done.")
 
-    // ── Quality report ────────────────────────────────────────────────────────
-    println("\n[info] ══ Registration Quality Report (mm) ══")
-    targets.zip(registered).foreach { case (s, reg) =>
-      val beforeStats = Metrics.symmetric(s.mesh, decRef)
-      val afterStats  = Metrics.symmetric(reg, decRef)
-      println(s"  ${s.id}")
-      println(f"    Before NR: ${beforeStats.render}")
-      println(f"    After  NR: ${afterStats.render}")
+    // ── Per-specimen table (supervisor format) ────────────────────────────────
+    println()
+    println("=" * 90)
+    println(f"  Gaussian Kernel Parameter Evaluation  —  σ=${GP_SIGMA}%.0f mm,  scale=${GP_SCALE}%.0f,  noise=${GP_NOISE}")
+    println("=" * 90)
+    println(f"  ${"Specimen"}%-35s  ${"RMS(mm)"}%8s  ${"HD95(mm)"}%9s  ${"Chamfer"}%9s")
+    println("-" * 90)
+
+    val rows = targets.zip(registered).map { case (s, reg) =>
+      val st    = Metrics.symmetric(reg, decRef)
+      // Chamfer = mean of one-directional mean distances (standard definition)
+      val d1    = Metrics.surfaceDistances(reg, decRef)
+      val d2    = Metrics.surfaceDistances(decRef, reg)
+      val chamf = (d1.sum / d1.length + d2.sum / d2.length) / 2.0
+      (s.id, st.rms, st.hd95, chamf)
     }
-    println("[info] ════════════════════════════════════════")
+
+    rows.foreach { case (id, rms, hd95, chamf) =>
+      val shortId = id.replace("paired_scapula_", "")
+      println(f"  $shortId%-35s  $rms%8.4f  $hd95%9.4f  $chamf%9.4f")
+    }
+    println("-" * 90)
+    val rmsVals   = rows.map(_._2)
+    val hd95Vals  = rows.map(_._3)
+    val chamfVals = rows.map(_._4)
+    println(f"  ${"Mean"}%-35s  ${rmsVals.sum/rmsVals.size}%8.4f  ${hd95Vals.sum/hd95Vals.size}%9.4f  ${chamfVals.sum/chamfVals.size}%9.4f")
+    println(f"  ${"Max (worst case)"}%-35s  ${rmsVals.max}%8.4f  ${hd95Vals.max}%9.4f  ${chamfVals.max}%9.4f")
+    val rmsStd = math.sqrt(rmsVals.map(v => (v - rmsVals.sum/rmsVals.size)*(v - rmsVals.sum/rmsVals.size)).sum / rmsVals.size)
+    println(f"  ${"Std Dev"}%-35s  $rmsStd%8.4f")
+    println("=" * 90)
+    println(s"  Kernel: k(x,y) = ${GP_SCALE}·exp(−‖x−y‖²/2·${GP_SIGMA}²)·I₃   [grid-search winner]")
+    println("=" * 90)
 
     // ── Open Scalismo UI ─────────────────────────────────────────────────────
     println("\n[UI] Opening viewer...")
-    val ui = ScalismoUI(s"SSM Research Visualization — $N_SELECT most-diverse specimens")
+    val ui = ScalismoUI(s"GP-Based Non-Rigid Registration — Scapula SSM (σ=${GP_SIGMA}mm, scale=${GP_SCALE})")
     Thread.sleep(1500)
 
     // G0: Reference only
