@@ -110,7 +110,7 @@ object ResearchVizApp {
     println(s"[step 5/5] Non-rigid GP-ICP registration (σ=${GP_SIGMA}mm, scale=$GP_SCALE, noise=$GP_NOISE, $NR_ITER iter)...")
     val registered: IndexedSeq[TriangleMesh[_3D]] = targets.zipWithIndex.map { case (s, i) =>
       print(s"  NR ${i+1}/${targets.length}  ${s.id}\r")
-      val r = gpIcpRegister(decRef, s.mesh)
+      val r = gpIcpRegister(ref.mesh, decRef, s.mesh)
       r
     }
     println(s"\n[info] Non-rigid registration done.")
@@ -213,12 +213,15 @@ object ResearchVizApp {
   }
 
   // ── GP-ICP non-rigid registration ────────────────────────────────────────
-  // Exact same method as VisualizationApp S05_NonRigid_Pass1:
-  //   σ=130mm, scale=30, noise=1.0, 10 iterations
-  //   Nystrom uses the decimated reference pointSet directly (not a sampler)
+  // 100% exact reproduction of NonRigidReg.register from commit c8c3489:
+  //   - Nystrom quadrature on originalRef.pointSet (full-resolution mesh)
+  //   - PDM reference = decimatedRef (5000 pts)
+  //   - Starting point = decimatedRef
+  //   - σ=130mm, scale=30, noise=1.0, 10 iterations
   private def gpIcpRegister(
-    reference: TriangleMesh[_3D],
-    target:    TriangleMesh[_3D]
+    originalRef:  TriangleMesh[_3D],   // full-resolution reference (Nystrom quadrature)
+    decimatedRef: TriangleMesh[_3D],   // 5000-pt reference (PDM domain + start)
+    target:       TriangleMesh[_3D]
   )(implicit rng: Random): TriangleMesh[_3D] = {
     val scalarKernel = GaussianKernel[_3D](GP_SIGMA) * GP_SCALE
     val kernel       = DiagonalKernel(scalarKernel, 3)
@@ -226,12 +229,12 @@ object ResearchVizApp {
     val gp           = GaussianProcess(zeroMean, kernel)
     val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(
       gp,
-      reference.pointSet,
+      originalRef.pointSet,            // ← full-res pointSet, same as original
       numBasisFunctions = GP_BASIS
     )
-    val model     = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
+    val model     = PointDistributionModel[_3D, TriangleMesh](decimatedRef, lowRankGP)
     val targetOps = target.operations
-    var current   = reference
+    var current   = decimatedRef
     for (it <- 0 until NR_ITER) {
       val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
         (id, targetOps.closestPointOnSurface(pt).point)
