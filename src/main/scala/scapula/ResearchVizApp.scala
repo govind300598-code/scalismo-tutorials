@@ -4,7 +4,6 @@ import scalismo.common.{Field, RealSpace}
 import scalismo.geometry.{EuclideanVector, Landmark, Point, _3D}
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
-import scalismo.numerics.UniformMeshSampler3D
 import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
@@ -27,32 +26,16 @@ import scalismo.utils.Random
 object ResearchVizApp {
 
   // ── REGISTRATION PARAMETERS ───────────────────────────────────────────────
-  private val MESH_RES  = 8000
+  private val MESH_RES  = 5000
   private val ICP_ITER  = 40
-  private val N_SELECT  = 5      // 5 random scapulae
+  private val N_SELECT  = 5
 
-  // Single Gaussian kernel — parameters selected by systematic grid search over
-  // sigma ∈ {20,40,60,80,100,120,140} mm × scale ∈ {5,10,15} on 5 diverse scapulae.
-  // Grid-search winner (lowest RMS, HD95, Chamfer across all 5 specimens):
-  //   sigma=20mm, scale=10  →  RMS=0.986mm  HD95=1.953mm  Chamfer=1.308mm
-  //
-  // WHY sigma=20mm wins:
-  //   The Gaussian kernel k(x,y) = scale·exp(−‖x−y‖²/2σ²) must capture the
-  //   spatial frequency of inter-subject shape variation on the scapula (~150mm bone).
-  //   sigma=20mm ≈ glenoid-fossa diameter — the scale of the most variable region.
-  //   Larger sigma (≥40mm) over-smooths deformations: the kernel response decays too
-  //   slowly, so the GP cannot represent sharp local shape differences.
-  //   Smaller sigma would under-smooth (too local, misses global shape variation).
-  //
-  // WHY scale=10 (not 5 or 15):
-  //   scale=5  → √5≈2.2mm RMS amplitude: too small, under-reaches the 2-3mm MSD gap
-  //   scale=10 → √10≈3.2mm: sufficient amplitude, best HD95+Chamfer balance
-  //   scale=15 → √15≈3.9mm: slightly too loose, higher RMS+Chamfer
+  // Original full-pipeline parameters (same as VisualizationApp S05_NonRigid_Pass1)
   private val GP_BASIS  = 100
-  private val GP_SIGMA  = 20.0   // mm  ← grid-search winner
-  private val GP_SCALE  = 10.0   // amplitude √10≈3.2mm RMS  ← grid-search winner
-  private val GP_NOISE  = 0.01   // tight: trusts ICP correspondences strongly
-  private val NR_ITER   = 30
+  private val GP_SIGMA  = 130.0
+  private val GP_SCALE  = 30.0
+  private val GP_NOISE  = 1.0
+  private val NR_ITER   = 10
 
   // ── tiny reflection helper ─────────────────────────────────────────────────
   private def setVisible(v: Any, on: Boolean): Unit = v match {
@@ -168,7 +151,7 @@ object ResearchVizApp {
 
     // ── Open Scalismo UI ─────────────────────────────────────────────────────
     println("\n[UI] Opening viewer...")
-    val ui = ScalismoUI(s"GP-Based Non-Rigid Registration — Scapula SSM (σ=${GP_SIGMA}mm, scale=${GP_SCALE})")
+    val ui = ScalismoUI(s"Scapula SSM — 5 Specimens (σ=${GP_SIGMA}mm, scale=${GP_SCALE}, noise=${GP_NOISE})")
     Thread.sleep(1500)
 
     // G0: Reference only
@@ -229,9 +212,10 @@ object ResearchVizApp {
     println("[info] Close window to exit.")
   }
 
-  // ── Single-kernel GP-ICP non-rigid registration ───────────────────────────
-  // Research-based single Gaussian kernel: sigma=30mm, scale=100, noise=0.01.
-  // Prints MSD every 10 iterations so convergence is visible in the terminal.
+  // ── GP-ICP non-rigid registration ────────────────────────────────────────
+  // Exact same method as VisualizationApp S05_NonRigid_Pass1:
+  //   σ=130mm, scale=30, noise=1.0, 10 iterations
+  //   Nystrom uses the decimated reference pointSet directly (not a sampler)
   private def gpIcpRegister(
     reference: TriangleMesh[_3D],
     target:    TriangleMesh[_3D]
@@ -240,10 +224,12 @@ object ResearchVizApp {
     val kernel       = DiagonalKernel(scalarKernel, 3)
     val zeroMean     = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val gp           = GaussianProcess(zeroMean, kernel)
-    val sampler      = UniformMeshSampler3D(reference, GP_BASIS * 10)
-    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, GP_BASIS)
-    val model        = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
-
+    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(
+      gp,
+      reference.pointSet,
+      numBasisFunctions = GP_BASIS
+    )
+    val model     = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
     val targetOps = target.operations
     var current   = reference
     for (it <- 0 until NR_ITER) {
@@ -251,10 +237,8 @@ object ResearchVizApp {
         (id, targetOps.closestPointOnSurface(pt).point)
       }.toIndexedSeq
       current = model.posterior(correspondences, GP_NOISE).mean
-      if ((it + 1) % 10 == 0) {
-        val msd = Metrics.symmetric(current, target).mean
-        print(s"  iter${it+1}: MSD=${f"$msd%.3f"}mm  ")
-      }
+      val msd = Metrics.symmetric(current, target).mean
+      print(s"  iter${it+1}: MSD=${f"$msd%.3f"}mm  ")
     }
     println()
     current
