@@ -26,13 +26,13 @@ import scalismo.utils.Random
 object ResearchVizApp {
 
   // ── REGISTRATION PARAMETERS ───────────────────────────────────────────────
-  private val MESH_RES  = 5000
+  private val MESH_RES  = 8000   // modelResolution=8000 from commit 3b52ed6
   private val ICP_ITER  = 40
   private val N_SELECT  = 5
 
-  // Original full-pipeline parameters (same as VisualizationApp S05_NonRigid_Pass1)
+  // Exact parameters from commit 3b52ed6 (VisualizationApp S05_NonRigid_Pass1)
   private val GP_BASIS  = 100
-  private val GP_SIGMA  = 130.0
+  private val GP_SIGMA  = 13.0   // 13mm NOT 130mm — fixed in commit 7f920cd
   private val GP_SCALE  = 30.0
   private val GP_NOISE  = 1.0
   private val NR_ITER   = 10
@@ -110,7 +110,7 @@ object ResearchVizApp {
     println(s"[step 5/5] Non-rigid GP-ICP registration (σ=${GP_SIGMA}mm, scale=$GP_SCALE, noise=$GP_NOISE, $NR_ITER iter)...")
     val registered: IndexedSeq[TriangleMesh[_3D]] = targets.zipWithIndex.map { case (s, i) =>
       print(s"  NR ${i+1}/${targets.length}  ${s.id}\r")
-      val r = gpIcpRegister(ref.mesh, decRef, s.mesh)
+      val r = gpIcpRegister(decRef, s.mesh)
       r
     }
     println(s"\n[info] Non-rigid registration done.")
@@ -151,7 +151,7 @@ object ResearchVizApp {
 
     // ── Open Scalismo UI ─────────────────────────────────────────────────────
     println("\n[UI] Opening viewer...")
-    val ui = ScalismoUI(s"Scapula SSM — 5 Specimens (σ=${GP_SIGMA}mm, scale=${GP_SCALE}, noise=${GP_NOISE})")
+    val ui = ScalismoUI(s"Scapula SSM — S05_NonRigid_Pass1 reproduction (σ=${GP_SIGMA}mm, scale=${GP_SCALE}, noise=${GP_NOISE})")
     Thread.sleep(1500)
 
     // G0: Reference only
@@ -213,28 +213,23 @@ object ResearchVizApp {
   }
 
   // ── GP-ICP non-rigid registration ────────────────────────────────────────
-  // 100% exact reproduction of NonRigidReg.register from commit c8c3489:
-  //   - Nystrom quadrature on originalRef.pointSet (full-resolution mesh)
-  //   - PDM reference = decimatedRef (5000 pts)
-  //   - Starting point = decimatedRef
-  //   - σ=130mm, scale=30, noise=1.0, 10 iterations
+  // Exact reproduction of NonRigidReg.register from commit 3b52ed6:
+  //   - Nystrom: UniformMeshSampler3D(reference, GP_BASIS*10) on decimated ref
+  //   - PDM reference = decimatedRef (8000 pts)
+  //   - σ=13mm, scale=30, noise=1.0, 10 iterations
   private def gpIcpRegister(
-    originalRef:  TriangleMesh[_3D],   // full-resolution reference (Nystrom quadrature)
-    decimatedRef: TriangleMesh[_3D],   // 5000-pt reference (PDM domain + start)
-    target:       TriangleMesh[_3D]
+    reference: TriangleMesh[_3D],   // decimated reference (8000 pts)
+    target:    TriangleMesh[_3D]
   )(implicit rng: Random): TriangleMesh[_3D] = {
     val scalarKernel = GaussianKernel[_3D](GP_SIGMA) * GP_SCALE
     val kernel       = DiagonalKernel(scalarKernel, 3)
     val zeroMean     = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val gp           = GaussianProcess(zeroMean, kernel)
-    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(
-      gp,
-      originalRef.pointSet,            // ← full-res pointSet, same as original
-      numBasisFunctions = GP_BASIS
-    )
-    val model     = PointDistributionModel[_3D, TriangleMesh](decimatedRef, lowRankGP)
-    val targetOps = target.operations
-    var current   = decimatedRef
+    val sampler      = scalismo.numerics.UniformMeshSampler3D(reference, GP_BASIS * 10)
+    val lowRankGP    = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, GP_BASIS)
+    val model        = PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
+    val targetOps    = target.operations
+    var current      = reference
     for (it <- 0 until NR_ITER) {
       val correspondences = current.pointSet.pointsWithId.map { case (pt, id) =>
         (id, targetOps.closestPointOnSurface(pt).point)
