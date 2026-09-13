@@ -17,36 +17,38 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
+  // Input / output paths — override with environment variables for different datasets
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  val outDir:  File = new File(env("SCAPULA_OUT_DIR",  "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
-  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  // ~8,000 vertices for the working/reference mesh
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
 
-  /** Non-rigid (GP) ICP iterations per pass. */
+  // 0-based index into the sorted valid-specimen list to use as the initial reference
+  val refIdx: Int = env("SCAPULA_REF_IDX", "2").toInt
+
+  // Rigid ICP iterations (landmark Procrustes + trimmed ICP)
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
 
-  /**
-   * Number of registration passes. Pass 1 registers to an arbitrary specimen; each further pass rebuilds the reference
-   * as the mean of the previous pass and re-registers. This removes reference bias.
-   */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
+  // ── GP kernel: k(x,y) = gpScale² · exp(−‖x−y‖² / 2·gpSigma²) · I₃ ──
+  // Single Gaussian kernel (sigma=130mm, scale=30, iters=10 per your spec)
+  val gpSigma: Double  = env("SCAPULA_GP_SIGMA", "130.0").toDouble
+  val gpScale: Double  = env("SCAPULA_GP_SCALE", "30.0").toDouble
+  val gpIcpIter: Int   = env("SCAPULA_GP_ICP_ITER", "10").toInt
 
-  /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
+  // Cholesky approximation tolerance and rank cap
   val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble
+  val gpMaxRank: Int              = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
-  /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
-  val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
+  // GP observation noise variance (sigma² in posterior update)
+  val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
 
-  /**
-   * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
-   * are NOT statistically independent samples; including both inflates apparent sample size.
-   */
-  val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "true").toBoolean
+  // Multi-pass refinement: each pass rebuilds the reference as the mean of the previous pass
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
-  val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
-
-  val seed: Long = env("SCAPULA_SEED", "42").toLong
+  val buildIndependentModel: Boolean = env("SCAPULA_INDEPENDENT_MODEL", "false").toBoolean
+  val showUi: Boolean                = env("SCAPULA_UI", "false").toBoolean
+  val seed: Long                     = env("SCAPULA_SEED", "42").toLong
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
