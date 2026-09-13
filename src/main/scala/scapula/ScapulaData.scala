@@ -27,8 +27,8 @@ object Config {
   // GP kernel: k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃
   val gpSigma: Double = env("SCAPULA_GP_SIGMA", "13.0").toDouble
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
-  val gpBasis: Int    = env("SCAPULA_GP_BASIS", "70").toInt
-  val gpIcpIter: Int  = env("SCAPULA_GP_ICP_ITER", "8").toInt
+  val gpBasis: Int    = env("SCAPULA_GP_BASIS", "100").toInt
+  val gpIcpIter: Int  = env("SCAPULA_GP_ICP_ITER", "10").toInt
   val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
   val gpMaxRank: Int  = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
