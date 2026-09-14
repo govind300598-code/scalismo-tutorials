@@ -77,11 +77,16 @@ object VisualizationApp {
     // ── 6. Build SSM ──────────────────────────────────────────────────────────
     println("[S06] Building SSM")
     val ssm: PointDistributionModel[_3D, TriangleMesh] =
-      SSMBuilder.loadSSM("ssm").getOrElse {
-        val m = SSMBuilder.buildSSM(decRef, registered)
-        SSMBuilder.saveSSM(m, "ssm")
-        m
-      }
+      SSMBuilder.loadSSM("ssm_pass4")
+        .orElse(SSMBuilder.loadSSM("ssm_pass3"))
+        .orElse(SSMBuilder.loadSSM("ssm_pass2"))
+        .orElse(SSMBuilder.loadSSM("ssm_pass1"))
+        .orElse(SSMBuilder.loadSSM("ssm"))
+        .getOrElse {
+          val m = SSMBuilder.buildSSM(decRef, registered)
+          SSMBuilder.saveSSM(m, "ssm")
+          m
+        }
     println(s"[info] SSM rank=${ssm.rank}")
 
     val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
