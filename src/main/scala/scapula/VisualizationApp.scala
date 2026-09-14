@@ -64,10 +64,7 @@ object VisualizationApp {
     // ── 5. Non-rigid GP registration (1 pass, cached) ─────────────────────────
     println("[S05] Non-rigid GP-ICP registration")
     val (registered, registeredPassName): (IndexedSeq[TriangleMesh[_3D]], String) =
-      SSMBuilder.loadMeshes("pass_4").map(_ -> "pass_4")
-        .orElse(SSMBuilder.loadMeshes("pass_3").map(_ -> "pass_3"))
-        .orElse(SSMBuilder.loadMeshes("pass_2").map(_ -> "pass_2"))
-        .orElse(SSMBuilder.loadMeshes("pass_1").map(_ -> "pass_1"))
+      SSMBuilder.loadMeshes("pass_1").map(_ -> "pass_1")
         .getOrElse {
           val r = rigidAligned.zipWithIndex.map { case (s, i) =>
             println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
