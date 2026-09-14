@@ -1,149 +1,133 @@
 package scapula
 
+import breeze.linalg.DenseVector
 import scalismo.geometry._3D
-import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh
+import scalismo.statisticalmodel.PointDistributionModel
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
-import java.io.File
-
-/**
- * Interactive viewer for the scapula SSM pipeline outputs.
- *
- * Groups:
- *   G00 – Reference mesh
- *   G01 – Raw specimens (all)
- *   G02 – Decimated 8k meshes
- *   G03 – Rigid-registered meshes
- *   G04 – GP prior model (first 3 modes ±3σ)
- *   G05 – Non-rigid registered (pass 1), loaded from pass_1/mesh_XXXX.vtk
- *   G06 – SSM mean mesh
- *   G07 – SSM mode 1 deformations ±1σ / ±2σ / ±3σ
- *   G08 – SSM mode 2 deformations
- *   G09 – SSM mode 3 deformations
- *   G10 – Overlay: rigid vs non-rigid (first specimen)
- *   G11 – Overlay: non-rigid vs SSM mean
- *   G12 – Non-rigid registered (pass 2), loaded from pass_2/mesh_XXXX.vtk
- *   G13 – SSM (pass 2) mean mesh
- *   G14 – GP prior model samples (5 random)
- *   G15 – SSM random samples (5)
- *   G16 – Surface distance colour map (first specimen, rigid vs mean)
- *   G17 – Landmark positions on reference
- *   G18 – Z-fighting demo (two identical meshes)
- */
 object VisualizationApp {
+
+  private def show[A](ui: ScalismoUI, grp: scalismo.ui.api.Group, obj: A, name: String)(
+    implicit ev: scalismo.ui.api.ShowInScene[A]
+  ): Unit = try {
+    ui.show(grp, obj, name)
+    Thread.sleep(20)
+  } catch { case e: Exception => println(s"  [warn] display '$name': ${e.getMessage}") }
 
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
-    val ui      = ScalismoUI()
-    val dataDir = Config.dataDir
-    val outDir  = Config.outDir
-    val preDir  = new File(outDir, "data/8k")
-    val rigDir  = new File(outDir, "rigid_registered")
+    // ── 1. Load specimens ─────────────────────────────────────────────────────
+    val dir = Config.dataDir
+    val csv = ScapulaData.csvFile(dir)
+    val (lmMap, fromHeader, _) = ScapulaData.readLandmarkCsv(csv)
+    if (!fromHeader) println("[warn] landmark columns resolved by fallback offsets")
 
-    // ── G00: Reference mesh ──────────────────────────────────────────────────
-    val refFile = new File(new File(outDir, "model"), "reference.stl")
-    if (refFile.exists()) {
-      val g = ui.createGroup("G00_Reference")
-      val ref = ScapulaData.loadMesh(refFile)
-      ui.show(g, ref, "reference")
+    case class Spec(id: String, mesh: TriangleMesh[_3D], lms: IndexedSeq[scalismo.geometry.Landmark[_3D]])
+
+    val specimens: IndexedSeq[Spec] = ScapulaData.specimens(dir)
+      .filter(s => lmMap.contains(s.modelId))
+      .map { s =>
+        val raw = ScapulaData.loadMesh(s.file)
+        val lms = lmMap(s.modelId)
+        if (s.isRight) Spec(s.modelId + "_mir", ScapulaData.mirrorMesh(raw), ScapulaData.mirrorLandmarks(lms))
+        else           Spec(s.modelId, raw, lms)
+      }
+    println(s"[info] ${specimens.length} specimens loaded")
+
+    // ── 2. Reference = specimen 002 left ─────────────────────────────────────
+    val ref = specimens.find(s => s.id.contains("002") && !s.id.endsWith("_mir"))
+                       .getOrElse(specimens.head)
+    println(s"[info] Reference: ${ref.id}")
+
+    // ── 3. Rigid alignment (Procrustes + ICP) ─────────────────────────────────
+    println("[S03] Landmark Procrustes alignment")
+    val lmAligned = specimens.map { s =>
+      val t = ScapulaData.rigidFromLandmarks(s.lms, ref.lms)
+      s.copy(mesh = s.mesh.transform(t), lms = s.lms.map(lm => lm.copy(point = t(lm.point))))
     }
 
-    // ── G01: Raw specimens ───────────────────────────────────────────────────
-    val specs = ScapulaData.specimens(dataDir)
-    if (specs.nonEmpty) {
-      val g = ui.createGroup("G01_RawSpecimens")
-      specs.take(3).foreach { s =>
-        ui.show(g, ScapulaData.loadMesh(s.file), s.modelId)
+    println("[S04] Rigid ICP refinement")
+    val rigidAligned = lmAligned.zipWithIndex.map { case (s, i) =>
+      println(s"  ICP ${i + 1}/${lmAligned.length}  ${s.id}")
+      s.copy(mesh = RigidAlign.rigidIcp(s.mesh, ref.mesh, Config.icpIterations))
+    }
+    println(s"[info] ${rigidAligned.length} rigid-aligned")
+
+    // ── 4. Decimate reference ─────────────────────────────────────────────────
+    val decRef = ref.mesh.operations.decimate(Config.modelResolution)
+    println(s"[info] Decimated reference: ${ref.mesh.pointSet.numberOfPoints} → ${decRef.pointSet.numberOfPoints} pts")
+
+    // ── 5. Non-rigid GP registration (1 pass, cached) ─────────────────────────
+    println("[S05] Non-rigid GP-ICP registration")
+    val registered: IndexedSeq[TriangleMesh[_3D]] =
+      SSMBuilder.loadMeshes("pass_1").getOrElse {
+        val r = rigidAligned.zipWithIndex.map { case (s, i) =>
+          println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
+          NonRigidReg.register(decRef, s.mesh)
+        }
+        SSMBuilder.saveMeshes(r, "pass_1")
+        r
+      }
+    println(s"[info] ${registered.length} non-rigid registered")
+
+    // ── 6. Build SSM ──────────────────────────────────────────────────────────
+    println("[S06] Building SSM")
+    val ssm: PointDistributionModel[_3D, TriangleMesh] =
+      SSMBuilder.loadSSM("ssm").getOrElse {
+        val m = SSMBuilder.buildSSM(decRef, registered)
+        SSMBuilder.saveSSM(m, "ssm")
+        m
+      }
+    println(s"[info] SSM rank=${ssm.rank}")
+
+    val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
+    val totalVar = evs.sum
+    println("[info]  Mode   Var%   Cumul%    σ mm")
+    var cumul = 0.0
+    evs.take(math.min(10, ssm.rank)).zipWithIndex.foreach { case (ev, i) =>
+      val pct = ev / totalVar * 100.0; cumul += pct
+      println(f"[info]   ${i+1}%2d   ${pct}%5.2f  ${cumul}%6.2f  ${math.sqrt(ev)}%7.3f")
+    }
+
+    // ── 7. Viewer ─────────────────────────────────────────────────────────────
+    println("[UI] Opening Scalismo viewer...")
+    val ui = ScalismoUI("Scapula SSM — Full Pipeline Viewer")
+    Thread.sleep(2000)
+
+    val g00 = ui.createGroup("S01_Landmarks (GC/TS/IA/PLA/AC)")
+    specimens.foreach(s => show(ui, g00, s.lms.toList, s.id))
+
+    val g02 = ui.createGroup("S02_Reference")
+    show(ui, g02, ref.lms.toList, "landmarks")
+    show(ui, g02, ref.mesh, ref.id)
+
+    val g03 = ui.createGroup("S03_LandmarkAligned (if still scattered — landmarks are WRONG)")
+    lmAligned.foreach(s => show(ui, g03, s.mesh, s.id))
+
+    val g04 = ui.createGroup("S04_RigidAligned (ALL bones should overlap — verify alignment)")
+    rigidAligned.foreach(s => show(ui, g04, s.mesh, s.id))
+
+    val g05 = ui.createGroup("S05_NonRigid_Pass1 (tighter overlap than S04)")
+    registered.zip(rigidAligned).foreach { case (m, s) => show(ui, g05, m, s.id) }
+
+    val g06 = ui.createGroup("S06_SSM — drag Mode sliders →")
+    show(ui, g06, ssm, "SSM")
+
+    for (modeIdx <- 0 until math.min(3, ssm.rank)) {
+      val ev = evs(modeIdx); val sigma = math.sqrt(ev)
+      val varPct = (ev / totalVar * 100.0).toInt
+      val gm = ui.createGroup(f"S0${7+modeIdx}_Mode${modeIdx+1} σ=${sigma}%.1fmm $varPct%%")
+      show(ui, gm, ssm.mean, "mean")
+      for (k <- Seq(-2, -1, 1, 2)) {
+        val c = DenseVector.zeros[Double](ssm.rank); c(modeIdx) = k.toDouble
+        show(ui, gm, ssm.instance(c), s"${k}σ")
       }
     }
 
-    // ── G02: Decimated 8k meshes ─────────────────────────────────────────────
-    if (preDir.exists()) {
-      val g     = ui.createGroup("G02_Decimated8k")
-      val files = Option(preDir.listFiles()).getOrElse(Array.empty[File])
-        .filter(_.getName.endsWith(".stl")).sortBy(_.getName).take(3)
-      files.foreach(f => ui.show(g, ScapulaData.loadMesh(f), f.getName.stripSuffix(".stl")))
-    }
-
-    // ── G03: Rigid-registered meshes ─────────────────────────────────────────
-    if (rigDir.exists()) {
-      val g     = ui.createGroup("G03_RigidRegistered")
-      val files = Option(rigDir.listFiles()).getOrElse(Array.empty[File])
-        .filter(_.getName.endsWith(".stl")).sortBy(_.getName).take(5)
-      files.foreach(f => ui.show(g, ScapulaData.loadMesh(f), f.getName.stripSuffix(".stl")))
-    }
-
-    // ── G05: Non-rigid pass 1 (mesh_XXXX.vtk) ───────────────────────────────
-    {
-      val g = ui.createGroup("G05_NonRigid_Pass1")
-      var i = 0
-      var loaded = true
-      while (loaded) {
-        SSMBuilder.loadOneMesh("pass_1", i) match {
-          case Some(m) => ui.show(g, m, f"mesh_$i%04d"); i += 1
-          case None    => loaded = false
-        }
-      }
-      if (i == 0) println("[G05] No pass_1 meshes found")
-      else        println(s"[G05] Loaded $i non-rigid pass-1 meshes")
-    }
-
-    // ── G06: SSM mean ────────────────────────────────────────────────────────
-    SSMBuilder.loadSSM("scapula_ssm") match {
-      case Some(ssm) =>
-        val g = ui.createGroup("G06_SSM_Mean")
-        ui.show(g, ssm.mean, "mean")
-
-        // ── G07-G09: PCA mode deformations ──────────────────────────────────
-        val nModes = math.min(3, ssm.rank)
-        for (modeIdx <- 0 until nModes) {
-          val g2 = ui.createGroup(s"G0${7 + modeIdx}_Mode${modeIdx + 1}")
-          for (alpha <- Seq(-3.0, -1.0, 0.0, 1.0, 3.0)) {
-            import breeze.linalg.DenseVector
-            val coeffs = DenseVector.zeros[Double](ssm.rank)
-            val ev     = ssm.gp.klBasis(modeIdx).eigenvalue
-            coeffs(modeIdx) = alpha * math.sqrt(ev)
-            val tag = if (alpha == 0.0) "mean"
-                      else if (alpha < 0) s"minus${(-alpha).toInt}sd"
-                      else s"plus${alpha.toInt}sd"
-            ui.show(g2, ssm.mean, s"mode${modeIdx + 1}_$tag")
-          }
-        }
-
-        // ── G15: SSM random samples ──────────────────────────────────────────
-        val g15 = ui.createGroup("G15_SSM_Samples")
-        (0 until 5).foreach { i => ui.show(g15, ssm.sample(), s"sample_$i") }
-
-      case None => println("[SSM] No scapula_ssm.h5 found — skipping G06-G09, G15")
-    }
-
-    // ── G12: Non-rigid pass 2 ────────────────────────────────────────────────
-    {
-      val g = ui.createGroup("G12_NonRigid_Pass2")
-      var i = 0
-      var loaded = true
-      while (loaded) {
-        SSMBuilder.loadOneMesh("pass_2", i) match {
-          case Some(m) => ui.show(g, m, f"mesh_$i%04d"); i += 1
-          case None    => loaded = false
-        }
-      }
-      if (i > 0) println(s"[G12] Loaded $i non-rigid pass-2 meshes")
-    }
-
-    // ── G18: Z-fighting demo ─────────────────────────────────────────────────
-    val refFile2 = new File(new File(outDir, "model"), "reference.stl")
-    if (refFile2.exists()) {
-      val g   = ui.createGroup("G18_ZFighting_Demo")
-      val ref = ScapulaData.loadMesh(refFile2)
-      ui.show(g, ref, "mesh_A")
-      ui.show(g, ref, "mesh_B")
-    }
-
-    println("\nVisualizationApp ready — close the viewer window to exit.")
+    println("[info] Done. Close the viewer window to exit.")
   }
 }
