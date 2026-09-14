@@ -63,16 +63,20 @@ object VisualizationApp {
 
     // ── 5. Non-rigid GP registration (1 pass, cached) ─────────────────────────
     println("[S05] Non-rigid GP-ICP registration")
-    val registered: IndexedSeq[TriangleMesh[_3D]] =
-      SSMBuilder.loadMeshes("pass_1").getOrElse {
-        val r = rigidAligned.zipWithIndex.map { case (s, i) =>
-          println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
-          NonRigidReg.register(decRef, s.mesh)
+    val (registered, registeredPassName): (IndexedSeq[TriangleMesh[_3D]], String) =
+      SSMBuilder.loadMeshes("pass_4").map(_ -> "pass_4")
+        .orElse(SSMBuilder.loadMeshes("pass_3").map(_ -> "pass_3"))
+        .orElse(SSMBuilder.loadMeshes("pass_2").map(_ -> "pass_2"))
+        .orElse(SSMBuilder.loadMeshes("pass_1").map(_ -> "pass_1"))
+        .getOrElse {
+          val r = rigidAligned.zipWithIndex.map { case (s, i) =>
+            println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
+            NonRigidReg.register(decRef, s.mesh)
+          }
+          SSMBuilder.saveMeshes(r, "pass_1")
+          (r, "pass_1")
         }
-        SSMBuilder.saveMeshes(r, "pass_1")
-        r
-      }
-    println(s"[info] ${registered.length} non-rigid registered")
+    println(s"[info] ${registered.length} non-rigid registered (from $registeredPassName)")
 
     // ── 6. Build SSM (optional — viewer opens even if this fails) ─────────────
     println("[S06] Building SSM")
@@ -106,7 +110,7 @@ object VisualizationApp {
     val g04 = ui.createGroup("S04_RigidAligned (ALL bones should overlap — verify alignment)")
     rigidAligned.foreach(s => show(ui, g04, s.mesh, s.id))
 
-    val g05 = ui.createGroup("S05_NonRigid_Pass1 (tighter overlap than S04)")
+    val g05 = ui.createGroup(s"S05_NonRigid_$registeredPassName (tighter overlap than S04 — fine patches = good)")
     registered.zip(rigidAligned).foreach { case (m, s) => show(ui, g05, m, s.id) }
 
     ssmOpt.foreach { ssm =>
