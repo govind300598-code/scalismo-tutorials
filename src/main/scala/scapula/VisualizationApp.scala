@@ -64,7 +64,7 @@ object VisualizationApp {
     // ── 5. Non-rigid GP registration (1 pass, cached) ─────────────────────────
     println("[S05] Non-rigid GP-ICP registration")
     val registered: IndexedSeq[TriangleMesh[_3D]] =
-      SSMBuilder.loadMeshes("pass_1").getOrElse {
+      SSMBuilder.loadMeshes("pass_2").orElse(SSMBuilder.loadMeshes("pass_1")).getOrElse {
         val r = rigidAligned.zipWithIndex.map { case (s, i) =>
           println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
           NonRigidReg.register(decRef, s.mesh)
@@ -77,7 +77,7 @@ object VisualizationApp {
     // ── 6. Build SSM ──────────────────────────────────────────────────────────
     println("[S06] Building SSM")
     val ssm: PointDistributionModel[_3D, TriangleMesh] =
-      SSMBuilder.loadSSM("ssm").getOrElse {
+      SSMBuilder.loadSSM("scapula_ssm").orElse(SSMBuilder.loadSSM("ssm")).getOrElse {
         val m = SSMBuilder.buildSSM(decRef, registered)
         SSMBuilder.saveSSM(m, "ssm")
         m
