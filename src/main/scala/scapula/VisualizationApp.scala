@@ -74,28 +74,18 @@ object VisualizationApp {
       }
     println(s"[info] ${registered.length} non-rigid registered")
 
-    // ── 6. Build SSM ──────────────────────────────────────────────────────────
+    // ── 6. Build SSM (optional — viewer opens even if this fails) ─────────────
     println("[S06] Building SSM")
-    val ssm: PointDistributionModel[_3D, TriangleMesh] =
+    val ssmOpt: Option[PointDistributionModel[_3D, TriangleMesh]] =
       SSMBuilder.loadSSM("ssm_pass4")
         .orElse(SSMBuilder.loadSSM("ssm_pass3"))
         .orElse(SSMBuilder.loadSSM("ssm_pass2"))
         .orElse(SSMBuilder.loadSSM("ssm_pass1"))
         .orElse(SSMBuilder.loadSSM("ssm"))
-        .getOrElse {
-          val m = SSMBuilder.buildSSM(decRef, registered)
-          SSMBuilder.saveSSM(m, "ssm")
-          m
-        }
-    println(s"[info] SSM rank=${ssm.rank}")
-
-    val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
-    val totalVar = evs.sum
-    println("[info]  Mode   Var%   Cumul%    σ mm")
-    var cumul = 0.0
-    evs.take(math.min(10, ssm.rank)).zipWithIndex.foreach { case (ev, i) =>
-      val pct = ev / totalVar * 100.0; cumul += pct
-      println(f"[info]   ${i+1}%2d   ${pct}%5.2f  ${cumul}%6.2f  ${math.sqrt(ev)}%7.3f")
+        .orElse(scala.util.Try(SSMBuilder.buildSSM(decRef, registered)).toOption)
+    ssmOpt match {
+      case Some(m) => println(s"[info] SSM rank=${m.rank}")
+      case None    => println("[warn] SSM unavailable — S06/S07/S08/S09 will be skipped")
     }
 
     // ── 7. Viewer ─────────────────────────────────────────────────────────────
@@ -119,17 +109,20 @@ object VisualizationApp {
     val g05 = ui.createGroup("S05_NonRigid_Pass1 (tighter overlap than S04)")
     registered.zip(rigidAligned).foreach { case (m, s) => show(ui, g05, m, s.id) }
 
-    val g06 = ui.createGroup("S06_SSM — drag Mode sliders →")
-    show(ui, g06, ssm, "SSM")
-
-    for (modeIdx <- 0 until math.min(3, ssm.rank)) {
-      val ev = evs(modeIdx); val sigma = math.sqrt(ev)
-      val varPct = (ev / totalVar * 100.0).toInt
-      val gm = ui.createGroup(f"S0${7+modeIdx}_Mode${modeIdx+1} σ=${sigma}%.1fmm $varPct%%")
-      show(ui, gm, ssm.mean, "mean")
-      for (k <- Seq(-2, -1, 1, 2)) {
-        val c = DenseVector.zeros[Double](ssm.rank); c(modeIdx) = k.toDouble
-        show(ui, gm, ssm.instance(c), s"${k}σ")
+    ssmOpt.foreach { ssm =>
+      val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
+      val totalVar = evs.sum
+      val g06 = ui.createGroup("S06_SSM — drag Mode sliders →")
+      show(ui, g06, ssm, "SSM")
+      for (modeIdx <- 0 until math.min(3, ssm.rank)) {
+        val ev = evs(modeIdx); val sigma = math.sqrt(ev)
+        val varPct = (ev / totalVar * 100.0).toInt
+        val gm = ui.createGroup(f"S0${7+modeIdx}_Mode${modeIdx+1} σ=${sigma}%.1fmm $varPct%%")
+        show(ui, gm, ssm.mean, "mean")
+        for (k <- Seq(-2, -1, 1, 2)) {
+          val c = DenseVector.zeros[Double](ssm.rank); c(modeIdx) = k.toDouble
+          show(ui, gm, ssm.instance(c), s"${k}σ")
+        }
       }
     }
 
