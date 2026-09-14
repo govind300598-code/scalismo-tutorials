@@ -107,8 +107,9 @@ object VisualizationApp {
     val g04 = ui.createGroup("S04_RigidAligned (ALL bones should overlap — verify alignment)")
     rigidAligned.foreach(s => show(ui, g04, s.mesh, s.id))
 
-    val g05 = ui.createGroup(s"S05_NonRigid_$registeredPassName (tighter overlap than S04 — fine patches = good)")
-    registered.zip(rigidAligned).foreach { case (m, s) => show(ui, g05, m, s.id) }
+    val g05 = ui.createGroup(s"S05_NonRigid_$registeredPassName (all registered + reference overlap here)")
+    show(ui, g05, decRef, "REFERENCE")
+    registered.foreach(m => show(ui, g05, m, "registered_" + registered.indexOf(m).toString))
 
     ssmOpt.foreach { ssm =>
       val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
