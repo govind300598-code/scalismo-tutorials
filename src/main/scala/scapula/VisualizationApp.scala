@@ -61,19 +61,38 @@ object VisualizationApp {
     val decRef = ref.mesh.operations.decimate(Config.modelResolution)
     println(s"[info] Decimated reference: ${ref.mesh.pointSet.numberOfPoints} → ${decRef.pointSet.numberOfPoints} pts")
 
-    // ── 5. Non-rigid GP registration (1 pass, cached) ─────────────────────────
-    println("[S05] Non-rigid GP-ICP registration")
-    val (registered, registeredPassName): (IndexedSeq[TriangleMesh[_3D]], String) =
-      SSMBuilder.loadMeshes("pass_1").map(_ -> "pass_1")
-        .getOrElse {
-          val r = rigidAligned.zipWithIndex.map { case (s, i) =>
-            println(s"  NR ${i + 1}/${rigidAligned.length}  ${s.id}")
-            NonRigidReg.register(decRef, s.mesh)
-          }
-          SSMBuilder.saveMeshes(r, "pass_1")
-          (r, "pass_1")
+    // ── 5. Non-rigid GP registration — iterative multi-pass ───────────────────
+    println(s"[S05] Non-rigid GP-ICP registration (${Config.refinePasses} pass(es))")
+
+    // Each pass: register all specimens to current reference, then update
+    // reference to mean of registered meshes for the next pass.
+    // This mirrors the Sept-7 pipeline (pass_1 → pass_4) that produced fine patches.
+    var passRef   = decRef
+    var lastMeshes: IndexedSeq[TriangleMesh[_3D]] = IndexedSeq.empty
+    var lastPass  = 0
+
+    for (pass <- 1 to Config.refinePasses) {
+      val tag = s"pass_$pass"
+      val cached = SSMBuilder.loadMeshes(tag)
+      lastMeshes = cached.getOrElse {
+        println(s"  [pass $pass] registering ${rigidAligned.length} specimens to ${passRef.pointSet.numberOfPoints}-pt reference")
+        val r = rigidAligned.zipWithIndex.map { case (s, i) =>
+          println(s"    NR $pass.${ i + 1}/${rigidAligned.length}  ${s.id}")
+          NonRigidReg.register(passRef, s.mesh)
         }
-    println(s"[info] ${registered.length} non-rigid registered (from $registeredPassName)")
+        SSMBuilder.saveMeshes(r, tag)
+        r
+      }
+      if (cached.isDefined) println(s"  [pass $pass] loaded from cache ($tag)")
+      lastPass = pass
+      // Update reference to mean of this pass for next iteration
+      if (pass < Config.refinePasses)
+        passRef = NonRigidReg.meanMesh(lastMeshes)
+    }
+
+    val registered     = lastMeshes
+    val registeredPass = s"pass_$lastPass"
+    println(s"[info] ${registered.length} non-rigid registered (final: $registeredPass)")
 
     // ── 6. Build SSM (optional — viewer opens even if this fails) ─────────────
     println("[S06] Building SSM")
@@ -83,7 +102,7 @@ object VisualizationApp {
         .orElse(SSMBuilder.loadSSM("ssm_pass2"))
         .orElse(SSMBuilder.loadSSM("ssm_pass1"))
         .orElse(SSMBuilder.loadSSM("ssm"))
-        .orElse(scala.util.Try(SSMBuilder.buildSSM(decRef, registered)).toOption)
+        .orElse(scala.util.Try(SSMBuilder.buildSSM(passRef, registered)).toOption)
     ssmOpt match {
       case Some(m) => println(s"[info] SSM rank=${m.rank}")
       case None    => println("[warn] SSM unavailable — S06/S07/S08/S09 will be skipped")
@@ -107,9 +126,9 @@ object VisualizationApp {
     val g04 = ui.createGroup("S04_RigidAligned (ALL bones should overlap — verify alignment)")
     rigidAligned.foreach(s => show(ui, g04, s.mesh, s.id))
 
-    val g05 = ui.createGroup(s"S05_NonRigid_$registeredPassName (all registered + reference overlap here)")
-    show(ui, g05, decRef, "REFERENCE")
-    registered.foreach(m => show(ui, g05, m, "registered_" + registered.indexOf(m).toString))
+    val g05 = ui.createGroup(s"S05_NonRigid_$registeredPass (all registered + reference overlap here)")
+    show(ui, g05, passRef, "REFERENCE")
+    registered.zipWithIndex.foreach { case (m, i) => show(ui, g05, m, s"registered_$i") }
 
     ssmOpt.foreach { ssm =>
       val evs: IndexedSeq[Double] = ssm.gp.klBasis.map(_.eigenvalue).toIndexedSeq
