@@ -95,6 +95,7 @@ object VisualizationApp {
       cacheDir.mkdirs()
       rigidAligned.zipWithIndex.map { case (s, i) =>
         val cached = SSMBuilder.loadOneMesh("pass_1", i)
+          .filter(_.pointSet.numberOfPoints == decRef.pointSet.numberOfPoints)
         cached.getOrElse {
           print(s"  NR ${i+1}/${rigidAligned.length}\r")
           val result = NonRigidReg.register(decRef, s.mesh)
