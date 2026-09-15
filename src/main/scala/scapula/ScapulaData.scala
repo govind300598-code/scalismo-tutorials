@@ -52,6 +52,10 @@ object Config {
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
+  /** Relative tolerance for Cholesky GP approximation — stops adding eigenpairs when the next
+   *  eigenvalue drops below this fraction of the largest one. */
+  val gpRelativeTolerance: Double = env("SCAPULA_GP_REL_TOL", "0.01").toDouble
+
   /**
    * If true, build a second SSM using only one side per subject. Left and mirrored-right scapulae from the same person
    * are NOT statistically independent samples; including both inflates apparent sample size.
