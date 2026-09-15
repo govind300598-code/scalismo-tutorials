@@ -22,7 +22,7 @@ object Config {
 
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
   val icpIterations: Int   = env("SCAPULA_ICP_ITERS", "40").toInt
-  val refinePasses: Int    = env("SCAPULA_REFINE_PASSES", "1").toInt
+  val refinePasses: Int    = env("SCAPULA_REFINE_PASSES", "4").toInt
 
   // GP kernel: k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃
   val gpSigma: Double = env("SCAPULA_GP_SIGMA", "13.0").toDouble
