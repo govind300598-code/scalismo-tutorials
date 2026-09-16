@@ -17,11 +17,11 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "scapula_output"))
+  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
+  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "8000").toInt
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
   /** Rigid ICP iterations (landmark Procrustes + trimmed ICP). */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
@@ -30,7 +30,7 @@ object Config {
    * Number of non-rigid registration passes. Pass 1 registers to the initial reference; each further pass rebuilds the
    * reference as the mean of the previous pass and re-registers. This removes reference bias.
    */
-  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "1").toInt
+  val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "4").toInt
 
   // ── GP kernel (single Gaussian): k(x,y) = gpScale · exp(−‖x−y‖² / 2·gpSigma²) · I₃ ──
   /** Length scale of the Gaussian kernel (mm). Controls spatial reach of deformations.
@@ -41,10 +41,10 @@ object Config {
   val gpScale: Double = env("SCAPULA_GP_SCALE", "30.0").toDouble
 
   /** Number of Nystrom basis functions for the low-rank GP approximation. */
-  val gpBasis: Int = env("SCAPULA_GP_BASIS", "70").toInt
+  val gpBasis: Int = env("SCAPULA_GP_BASIS", "100").toInt
 
   /** GP-ICP iterations per non-rigid registration pass. */
-  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "8").toInt
+  val gpIcpIter: Int = env("SCAPULA_GP_ICP_ITER", "10").toInt
 
   /** Observation noise variance in the GP posterior update step. */
   val gpNoise: Double = env("SCAPULA_GP_NOISE", "1.0").toDouble
@@ -52,8 +52,7 @@ object Config {
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
 
-  /** Relative tolerance for Cholesky GP approximation — stops adding eigenpairs when the next
-   *  eigenvalue drops below this fraction of the largest one. */
+  /** Relative tolerance for Cholesky GP approximation. */
   val gpRelativeTolerance: Double = env("SCAPULA_GP_REL_TOL", "0.01").toDouble
 
   /**
