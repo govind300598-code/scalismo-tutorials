@@ -1,7 +1,7 @@
 package scapula
 
 import breeze.linalg.DenseVector
-import scalismo.common.Field
+import scalismo.common.{EuclideanSpace3D, Field}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D}
@@ -124,6 +124,6 @@ object GPRegistrationCore {
       coefficients: DenseVector[Double]
   ): TriangleMesh[_3D] = {
     val transformationSpace = GaussianProcessTransformationSpace(lowRankGP)
-    referenceMesh.transform(transformationSpace.transformForParameters(coefficients))
+    referenceMesh.transform(transformationSpace.transformationForParameters(coefficients))
   }
 }
