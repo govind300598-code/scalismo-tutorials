@@ -46,7 +46,7 @@ object NonRigidRegistration {
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, k)
 
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-      reference.pointSet,
+      reference,
       gp,
       relativeTolerance,
       interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
