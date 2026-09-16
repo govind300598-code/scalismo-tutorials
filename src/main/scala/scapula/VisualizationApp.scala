@@ -83,26 +83,30 @@ object VisualizationApp {
     val decimatedRef = ref.mesh.operations.decimate(Config.modelResolution)
     println(s"[info] Reference decimated: ${ref.mesh.pointSet.numberOfPoints} → ${decimatedRef.pointSet.numberOfPoints} vertices")
 
-    // ── S05/S06: Non-rigid GP registration (multi-pass, cached) ──────────────
+    // ── S05/S06: Non-rigid LBFGS registration (multi-pass, cached) ────────────
+    // Follows Dennis Madsen's approach: multi-scale kernel + LBFGS on distance images
     var nonRigidMeshes: IndexedSeq[TriangleMesh[_3D]] = IndexedSeq.empty
     var currentRef: TriangleMesh[_3D] = decimatedRef
 
-    val finalTag = s"pass_${Config.refinePasses}"
+    val finalTag = s"lbfgs_pass_${Config.refinePasses}"
     SSMBuilder.loadMeshes(finalTag) match {
       case Some(cached) =>
-        println(s"[info] Loaded ${cached.length} cached registered meshes from '${SSMBuilder.cacheDir(finalTag)}'")
+        println(s"[info] Loaded ${cached.length} cached LBFGS registered meshes from '${SSMBuilder.cacheDir(finalTag)}'")
         nonRigidMeshes = cached
         currentRef = NonRigidReg.meanMesh(cached)
 
       case None =>
         for (pass <- 1 to Config.refinePasses) {
-          println(s"[pass $pass/${Config.refinePasses}] Non-rigid GP-ICP registration (σ=${Config.gpSigma}mm)")
-          val tag = s"pass_$pass"
+          println(s"[pass $pass/${Config.refinePasses}] Non-rigid LBFGS registration (multi-scale kernel)")
+          val tag = s"lbfgs_pass_$pass"
           val registered: IndexedSeq[TriangleMesh[_3D]] =
             SSMBuilder.loadMeshes(tag).getOrElse {
+              println(s"  Building GP model for pass $pass (Cholesky approx)...")
+              val (lowRankGP, gpmm) = NonRigidRegLBFGS.buildLowRankGP(currentRef)
+              println(s"  GPMM rank = ${gpmm.rank}")
               val r = rigidAligned.zipWithIndex.map { case (s, i) =>
                 println(s"  specimen ${i + 1}/${rigidAligned.length}  (${s.id})")
-                NonRigidReg.register(currentRef, s.mesh)
+                NonRigidRegLBFGS.register(lowRankGP, gpmm, currentRef, s.mesh)
               }
               SSMBuilder.saveMeshes(r, tag)
               r
@@ -120,7 +124,7 @@ object VisualizationApp {
         }
     }
 
-    SSMBuilder.loadMeshes("pass_1").foreach { p1 =>
+    SSMBuilder.loadMeshes("lbfgs_pass_1").foreach { p1 =>
       val s05 = ui.createGroup("S05_NonRigid_Pass1 (tighter than S04)")
       p1.zip(rigidAligned).foreach { case (m, s) => safeShow(ui, s05, m, s.id) }
     }
@@ -129,7 +133,7 @@ object VisualizationApp {
     nonRigidMeshes.zip(rigidAligned).foreach { case (m, s) => safeShow(ui, s06, m, s.id) }
 
     val s07 = ui.createGroup("S07_MeanShapes (< 1 mm shift between passes = converged)")
-    SSMBuilder.loadMeshes("pass_1").foreach { p1 =>
+    SSMBuilder.loadMeshes("lbfgs_pass_1").foreach { p1 =>
       safeShow(ui, s07, NonRigidReg.meanMesh(p1.toIndexedSeq), "Mean_Pass1")
     }
     safeShow(ui, s07, currentRef, s"Mean_Pass${Config.refinePasses}")
