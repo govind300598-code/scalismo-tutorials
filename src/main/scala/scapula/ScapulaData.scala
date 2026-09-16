@@ -40,11 +40,27 @@ object Config {
   val referenceMeshFile: Option[File] =
     if (referenceMeshPath.trim.isEmpty) None else Some(new File(referenceMeshPath))
 
-  /** Mirror the external reference mesh before use -- flip this if it turns out to be the opposite side from the population. */
-  val referenceMirror: Boolean = env("SCAPULA_REFERENCE_MIRROR", "false").toBoolean
+  /**
+   * Which orientation(s) of the external reference to try: "auto" (default) tries both as-is and mirrored, and
+   * keeps whichever aligns better (lower HD95) onto the population's pivot specimen -- a mismatched chirality
+   * (template is the opposite side from the population) cannot be fixed by any rigid rotation, only a reflection,
+   * so this is a real ambiguity that has to be resolved by trying both, not guessed. "asis" / "mirrored" force one
+   * orientation only (skips the other candidate, saving a little time once you already know which is right).
+   */
+  val referenceOrientation: String = env("SCAPULA_REFERENCE_ORIENTATION", "auto").toLowerCase
 
-  /** Above this mean residual (mm) after robustly aligning the external reference into the population frame, warn loudly. */
+  /** Above this mean residual (mm) for the BEST orientation, warn loudly (but still proceed). */
   val referenceAlignWarnMeanMm: Double = env("SCAPULA_REFERENCE_ALIGN_WARN_MM", "10.0").toDouble
+
+  /**
+   * Above this HD95 (mm) for the BEST orientation, ABORT before the (~1-2 hour) non-rigid registration loop rather
+   * than spend that time on a reference that's already known to be a bad fit. HD95 catches a chirality mismatch that
+   * mean residual alone can miss: a wrong-side template can still look deceptively OK on average (similar overall
+   * bounding envelope) while its actual anatomical features are systematically misplaced, which mean blurs out
+   * across thousands of points but HD95 does not. Override with SCAPULA_REFERENCE_FORCE=true to proceed anyway.
+   */
+  val referenceAlignAbortHD95Mm: Double = env("SCAPULA_REFERENCE_ALIGN_ABORT_HD95_MM", "15.0").toDouble
+  val referenceAlignForce: Boolean = env("SCAPULA_REFERENCE_FORCE", "false").toBoolean
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt

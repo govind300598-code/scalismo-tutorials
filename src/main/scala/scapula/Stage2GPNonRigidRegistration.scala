@@ -91,22 +91,48 @@ object Stage2GPNonRigidRegistration {
     var reference: TriangleMesh[_3D] = Config.referenceMeshFile match {
       case Some(file) if file.exists() =>
         println(s"\nExternal reference template: ${file.getPath}")
-        var templateMesh = ScapulaData.loadMesh(file)
-        if (Config.referenceMirror) {
-          templateMesh = ScapulaData.mirrorMesh(templateMesh)
-          println("  mirrored first (SCAPULA_REFERENCE_MIRROR=true)")
+        val rawTemplate = ScapulaData.loadMesh(file)
+
+        // A wrong-chirality template (opposite side from the population) cannot be fixed by any rigid ROTATION --
+        // only a reflection can turn a left scapula into a right one, and robustTemplateAlign deliberately never
+        // tries a reflection (a rigid motion can't do that to a real bone). So chirality is a real ambiguity that
+        // has to be settled by trying both orientations and keeping whichever one actually fits, not by guessing.
+        val orientationsToTry: Seq[(String, TriangleMesh[_3D])] = Config.referenceOrientation match {
+          case "asis"     => Seq("as-is" -> rawTemplate)
+          case "mirrored" => Seq("mirrored" -> ScapulaData.mirrorMesh(rawTemplate))
+          case _          => Seq("as-is" -> rawTemplate, "mirrored" -> ScapulaData.mirrorMesh(rawTemplate))
         }
-        val templateDecimated = templateMesh.operations.decimate(Config.modelResolution)
-        println(s"  decimated to ${templateDecimated.pointSet.numberOfPoints} vertices; aligning onto pivot " +
-          s"specimen ${referenceSpecimen.modelId} (PCA coarse pose + trimmed ICP, 4 candidate rotations)...")
-        val (aligned, stats) = RigidAlign.robustTemplateAlign(templateDecimated, pivotAligned, Config.icpIterations)
-        println(f"  alignment residual: ${stats.render}")
-        if (stats.mean > Config.referenceAlignWarnMeanMm)
-          println(f"  !! WARNING: mean residual ${stats.mean}%.1f mm exceeds the ${Config.referenceAlignWarnMeanMm}%.1f mm " +
-            "threshold -- this usually means the template is the wrong side (left vs. right). Try setting " +
-            "SCAPULA_REFERENCE_MIRROR=true, or open reference.vtk in ParaView/MeshLab to check by eye before " +
-            "trusting the rest of this run.")
-        aligned
+        val candidates = orientationsToTry.map { case (label, templateMesh) =>
+          val templateDecimated = templateMesh.operations.decimate(Config.modelResolution)
+          println(s"  trying orientation '$label' (${templateDecimated.pointSet.numberOfPoints} vertices) onto " +
+            s"pivot specimen ${referenceSpecimen.modelId} (PCA coarse pose + trimmed ICP, 4 candidate rotations)...")
+          val (aligned, stats) = RigidAlign.robustTemplateAlign(templateDecimated, pivotAligned, Config.icpIterations)
+          println(f"    residual: ${stats.render}")
+          (label, aligned, stats)
+        }
+        val (bestLabel, bestAligned, bestStats) = candidates.minBy { case (_, _, stats) => stats.hd95 }
+        println(f"  best orientation: '$bestLabel' -- ${bestStats.render}")
+
+        // HD95, not mean, is what actually catches a chirality mismatch: a wrong-side template can still look
+        // deceptively OK on mean residual (similar overall bounding envelope) while its anatomical features --
+        // glenoid, spine, angles -- are systematically misplaced, which HD95 exposes and a population-wide mean
+        // blurs out. Non-rigid registration CANNOT fix a bad correspondence like this; it will make it worse, and
+        // do so uniformly across every specimen (as opposed to a few noisy outliers), while burning ~1-2 hours.
+        if (bestStats.hd95 > Config.referenceAlignAbortHD95Mm && !Config.referenceAlignForce) {
+          throw new RuntimeException(
+            f"Best external-reference alignment still has HD95=${bestStats.hd95}%.1f mm, above the " +
+              f"${Config.referenceAlignAbortHD95Mm}%.1f mm threshold, in BOTH orientations tried " +
+              s"(${candidates.map { case (l, _, s) => f"$l: HD95=${s.hd95}%.1f" }.mkString(", ")}). Aborting " +
+              "before the non-rigid registration loop instead of spending ~1-2 hours registering onto a reference " +
+              "that's already known to fit badly. Either: (1) set SCAPULA_REFERENCE_MESH=\"\" to use an " +
+              "in-population reference instead (recommended), or (2) if you're confident this template is right, " +
+              "rerun with SCAPULA_REFERENCE_FORCE=true."
+          )
+        }
+        if (bestStats.mean > Config.referenceAlignWarnMeanMm)
+          println(f"  !! WARNING: mean residual ${bestStats.mean}%.1f mm exceeds ${Config.referenceAlignWarnMeanMm}%.1f mm -- " +
+            "inspect reference.vtk in ParaView/MeshLab before trusting the rest of this run.")
+        bestAligned
       case Some(file) =>
         println(s"\nSCAPULA_REFERENCE_MESH points at ${file.getPath}, which does not exist -- falling back to an " +
           s"in-population reference (${referenceSpecimen.modelId}).")
