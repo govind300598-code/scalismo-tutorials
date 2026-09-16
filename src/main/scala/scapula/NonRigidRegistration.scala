@@ -1,14 +1,14 @@
 package scapula
 
-import scalismo.common.{Field, PointId}
+import scalismo.common.{Field, PointId, RealSpace}
 import scalismo.common.interpolation.TriangleMeshInterpolator3D
 import scalismo.geometry.*
 import scalismo.kernels.*
 import scalismo.mesh.*
 import scalismo.numerics.UniformMeshSampler3D
-import scalismo.registration.LandmarkRegistration
 import scalismo.statisticalmodel.*
 import scalismo.utils.Random
+import breeze.linalg.{DenseMatrix, DenseVector}
 
 /**
  * Non-rigid registration via GP ICP.
@@ -33,8 +33,7 @@ object NonRigidRegistration {
    * can capture both global pose residuals and fine local shape variation.
    */
   def buildModel(reference: TriangleMesh[_3D],
-                 relativeTolerance: Double = Config.gpRelativeTolerance,
-                 maxRank: Int = Config.gpMaxRank
+                 relativeTolerance: Double = Config.gpRelativeTolerance
   )(implicit rng: Random): PointDistributionModel[_3D, TriangleMesh] = {
 
     val scalarKernel: PDKernel[_3D] =
@@ -43,15 +42,14 @@ object NonRigidRegistration {
 
     val k: MatrixValuedPDKernel[_3D] = DiagonalKernel3D(scalarKernel, 3)
 
-    val zeroMean = Field(EuclideanSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
+    val zeroMean = Field(RealSpace[_3D], (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val gp = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, k)
 
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       reference.pointSet,
       gp,
       relativeTolerance,
-      interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]](),
-      maxNumberOfEigenpairs = maxRank
+      interpolator = TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
 
     PointDistributionModel[_3D, TriangleMesh](reference, lowRankGP)
@@ -75,8 +73,8 @@ object NonRigidRegistration {
     val targetOps = target.operations
     val sampleIds = RigidAlign.uniformIds(model.reference, numSamplePoints)
     val noiseDistribution = MultivariateNormalDistribution(
-      EuclideanVector.zeros[_3D],
-      SquareMatrix.eye[_3D] * sigma2
+      DenseVector.zeros[Double](3),
+      DenseMatrix.eye[Double](3) * sigma2
     )
 
     var currentModel = model
@@ -155,7 +153,7 @@ object NonRigidRegistration {
 
     val meanPts = (0 until n).map { i =>
       val sum = registered.foldLeft(EuclideanVector.zeros[_3D]) { case (acc, (_, m)) =>
-        acc + m.pointSet.point(i).toVector
+        acc + m.pointSet.point(PointId(i)).toVector
       }
       Point3D(sum.x / registered.size, sum.y / registered.size, sum.z / registered.size)
     }
