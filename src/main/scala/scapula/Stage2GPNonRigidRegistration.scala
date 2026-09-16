@@ -80,9 +80,41 @@ object Stage2GPNonRigidRegistration {
     println(s"Rigidly aligned all ${alignedTargets.length} specimens into the reference's landmark frame " +
       s"(${Config.icpIterations} ICP iterations after landmark Procrustes).")
 
-    var reference = referenceRawMesh.operations.decimate(Config.modelResolution)
-    println(s"Reference decimated to ${reference.pointSet.numberOfPoints} vertices " +
-      s"(requested ${Config.modelResolution}).")
+    // --------------------------------------------------------------------------------------- reference topology
+    // Prefer an external template mesh (default: the Wikimedia scapula from the mailing-list thread) over one of
+    // the 24 paired specimens, so the SSM's topology is not biased toward any one subject's anatomy. The template
+    // was never digitised with the population's landmark protocol, so it cannot be landmark-aligned; instead it is
+    // robustly rigid-aligned (PCA coarse pose + trimmed ICP, see RigidAlign.robustTemplateAlign) onto the pivot
+    // specimen's mesh, which is already known to be in the population's landmark frame.
+    val pivotAligned = alignedTargets.find(_._1 == referenceSpecimen.modelId).get._2
+
+    var reference: TriangleMesh[_3D] = Config.referenceMeshFile match {
+      case Some(file) if file.exists() =>
+        println(s"\nExternal reference template: ${file.getPath}")
+        var templateMesh = ScapulaData.loadMesh(file)
+        if (Config.referenceMirror) {
+          templateMesh = ScapulaData.mirrorMesh(templateMesh)
+          println("  mirrored first (SCAPULA_REFERENCE_MIRROR=true)")
+        }
+        val templateDecimated = templateMesh.operations.decimate(Config.modelResolution)
+        println(s"  decimated to ${templateDecimated.pointSet.numberOfPoints} vertices; aligning onto pivot " +
+          s"specimen ${referenceSpecimen.modelId} (PCA coarse pose + trimmed ICP, 4 candidate rotations)...")
+        val (aligned, stats) = RigidAlign.robustTemplateAlign(templateDecimated, pivotAligned, Config.icpIterations)
+        println(f"  alignment residual: ${stats.render}")
+        if (stats.mean > Config.referenceAlignWarnMeanMm)
+          println(f"  !! WARNING: mean residual ${stats.mean}%.1f mm exceeds the ${Config.referenceAlignWarnMeanMm}%.1f mm " +
+            "threshold -- this usually means the template is the wrong side (left vs. right). Try setting " +
+            "SCAPULA_REFERENCE_MIRROR=true, or open reference.vtk in ParaView/MeshLab to check by eye before " +
+            "trusting the rest of this run.")
+        aligned
+      case Some(file) =>
+        println(s"\nSCAPULA_REFERENCE_MESH points at ${file.getPath}, which does not exist -- falling back to an " +
+          s"in-population reference (${referenceSpecimen.modelId}).")
+        referenceRawMesh.operations.decimate(Config.modelResolution)
+      case None =>
+        referenceRawMesh.operations.decimate(Config.modelResolution)
+    }
+    println(s"Reference has ${reference.pointSet.numberOfPoints} vertices (requested ${Config.modelResolution}).")
 
     // -------------------------------------------------------------------------------------------- refinement loop
     var registered: IndexedSeq[(String, TriangleMesh[_3D])] = IndexedSeq.empty

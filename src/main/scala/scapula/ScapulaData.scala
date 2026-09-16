@@ -28,6 +28,24 @@ object Config {
   val outDir: File =
     new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"))
 
+  /**
+   * Optional external template mesh used as the SSM reference topology, instead of picking one of the 24 paired
+   * specimens (which would bias the model toward that one subject's anatomy). Defaults to the Wikimedia scapula
+   * used as the worked example in the scalismo mailing-list thread this pipeline is based on
+   * (https://commons.wikimedia.org/wiki/File:Human_scapula_1.stl). Set SCAPULA_REFERENCE_MESH="" to disable this
+   * and fall back to an in-population reference instead.
+   */
+  val referenceMeshPath: String =
+    env("SCAPULA_REFERENCE_MESH", "/home/g25upadh/Documents/20210626175424!Human_scapula_1.stl")
+  val referenceMeshFile: Option[File] =
+    if (referenceMeshPath.trim.isEmpty) None else Some(new File(referenceMeshPath))
+
+  /** Mirror the external reference mesh before use -- flip this if it turns out to be the opposite side from the population. */
+  val referenceMirror: Boolean = env("SCAPULA_REFERENCE_MIRROR", "false").toBoolean
+
+  /** Above this mean residual (mm) after robustly aligning the external reference into the population frame, warn loudly. */
+  val referenceAlignWarnMeanMm: Double = env("SCAPULA_REFERENCE_ALIGN_WARN_MM", "10.0").toDouble
+
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
