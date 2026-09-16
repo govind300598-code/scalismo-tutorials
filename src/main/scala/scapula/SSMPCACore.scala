@@ -14,7 +14,7 @@ import scalismo.utils.Random
  * `reference` used in Stage 2 (same vertex count, same vertex order) -- that is exactly what Stage 2's registration
  * guarantees, and is why meshes are exchanged between the stages as VTK, never STL.
  */
-object ShapeMatrix {
+object SSMPCACore {
 
   def toVector(mesh: TriangleMesh[_3D]): DenseVector[Double] = {
     val n = mesh.pointSet.numberOfPoints

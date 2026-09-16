@@ -23,8 +23,10 @@ object Config {
 
   val dataDir: File =
     new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
+  // Deliberately distinct from any pre-existing output folder (e.g. ssm_output, ssm_final, aligned_scapulae_output)
+  // so this pipeline's results never land in, or get mixed up with, results from a different script/run.
   val outDir: File =
-    new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_pipeline_out"))
+    new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt

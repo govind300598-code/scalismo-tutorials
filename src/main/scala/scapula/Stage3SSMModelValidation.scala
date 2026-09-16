@@ -30,15 +30,15 @@ import java.io.{File, PrintWriter}
  * specificity at that mode count -- the single numbers usually quoted in a paper's results paragraph (e.g. "at 95%
  * compactness (k=7 modes), generalization = 1.3 mm, specificity = 1.8 mm").
  *
- * Run after Stage2Registration; reads its VTK output (never STL -- see Stage2Registration's header comment).
+ * Run after Stage2GPNonRigidRegistration; reads its VTK output (never STL -- see Stage2GPNonRigidRegistration's header comment).
  */
-object Stage3SSMValidation {
+object Stage3SSMModelValidation {
 
   final case class ModeRow(modes: Int, compactnessPct: Double, generalizationMm: Double, specificityMm: Double)
 
   def loadRegistered(dir: File): (TriangleMesh[_3D], IndexedSeq[(String, TriangleMesh[_3D])]) = {
     val referenceFile = new File(dir, "reference.vtk")
-    require(referenceFile.exists(), s"Missing ${referenceFile.getPath} -- run Stage2Registration first.")
+    require(referenceFile.exists(), s"Missing ${referenceFile.getPath} -- run Stage2GPNonRigidRegistration first.")
     val reference = ScapulaData.loadMesh(referenceFile)
 
     val registeredDir = new File(dir, "registered")
@@ -46,7 +46,7 @@ object Stage3SSMValidation {
       .getOrElse(Array.empty[File])
       .filter(_.getName.toLowerCase.endsWith(".vtk"))
       .sortBy(_.getName)
-    require(files.nonEmpty, s"No registered meshes found in ${registeredDir.getPath} -- run Stage2Registration first.")
+    require(files.nonEmpty, s"No registered meshes found in ${registeredDir.getPath} -- run Stage2GPNonRigidRegistration first.")
 
     val meshes = files.toIndexedSeq.map(f => f.getName.stripSuffix(".vtk") -> ScapulaData.loadMesh(f))
     meshes.foreach { case (id, m) =>
@@ -70,12 +70,12 @@ object Stage3SSMValidation {
     val n = vectors.length
     val perFoldErrors: IndexedSeq[IndexedSeq[Double]] = (0 until n).map { holdOut =>
       val trainVectors = vectors.indices.filterNot(_ == holdOut).map(vectors)
-      val pca = ShapeMatrix.fit(ShapeMatrix.dataMatrixFromVectors(trainVectors))
+      val pca = SSMPCACore.fit(SSMPCACore.dataMatrixFromVectors(trainVectors))
       val target = vectors(holdOut)
       val availableModes = math.min(maxModes, pca.eigenvectors.cols)
       val errors = (1 to availableModes).map { k =>
-        val recon = ShapeMatrix.project(pca, target, k)
-        ShapeMatrix.rmsPointDistance(recon, target, numPoints)
+        val recon = SSMPCACore.project(pca, target, k)
+        SSMPCACore.rmsPointDistance(recon, target, numPoints)
       }
       // A leave-one-out fold trains on n-1 specimens, so its model can have fewer than maxModes informative modes
       // (rank <= n-2). Beyond that point it has no more variance left to add, so its reconstruction -- and hence its
@@ -86,7 +86,7 @@ object Stage3SSMValidation {
   }
 
   def specificity(
-      pca: ShapeMatrix.DualPCA,
+      pca: SSMPCACore.DualPCA,
       trainingVectors: IndexedSeq[DenseVector[Double]],
       numPoints: Int,
       maxModes: Int,
@@ -94,8 +94,8 @@ object Stage3SSMValidation {
   )(implicit rng: Random): IndexedSeq[Double] =
     (1 to maxModes).map { k =>
       val distances = (0 until numSamples).map { _ =>
-        val s = ShapeMatrix.sample(pca, k)
-        trainingVectors.map(v => ShapeMatrix.rmsPointDistance(s, v, numPoints)).min
+        val s = SSMPCACore.sample(pca, k)
+        trainingVectors.map(v => SSMPCACore.rmsPointDistance(s, v, numPoints)).min
       }
       distances.sum / numSamples
     }
@@ -107,8 +107,8 @@ object Stage3SSMValidation {
     val n = meshes.length
     require(n >= 4, s"Need at least 4 specimens to run leave-one-out validation ('$name' has $n)")
     val numPoints = meshes.head.pointSet.numberOfPoints
-    val vectors = meshes.map(ShapeMatrix.toVector)
-    val fullPca = ShapeMatrix.fit(ShapeMatrix.dataMatrixFromVectors(vectors))
+    val vectors = meshes.map(SSMPCACore.toVector)
+    val fullPca = SSMPCACore.fit(SSMPCACore.dataMatrixFromVectors(vectors))
     val maxModes = math.min(Config.maxValidationModes, fullPca.eigenvectors.cols)
 
     println(s"\n[$name] n=$n specimens, $numPoints vertices/specimen, full-model rank=${fullPca.eigenvectors.cols}, " +

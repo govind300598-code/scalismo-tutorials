@@ -11,7 +11,7 @@ import java.io.{File, PrintWriter}
 
 /**
  * STAGE 2 -- build point-to-point correspondence across the whole population by non-rigidly registering a common
- * reference to every specimen (see NonRigidRegistration for the fitting algorithm itself, ported from the mailing
+ * reference to every specimen (see GPRegistrationCore for the fitting algorithm itself, ported from the mailing
  * list). Run Stage1Diagnostics first: this stage assumes the rigid pipeline (mirroring, landmark frame, orientation)
  * is already known to be sound.
  *
@@ -22,7 +22,7 @@ import java.io.{File, PrintWriter}
  *   registered/<modelId>.vtk   every specimen warped into that reference's correspondence
  *   registration_accuracy.csv  per-specimen surface-distance residual between the registered mesh and the real target
  */
-object Stage2Registration {
+object Stage2GPNonRigidRegistration {
 
   private def meanMesh(meshes: IndexedSeq[TriangleMesh[_3D]], triangles: TriangleList): TriangleMesh[_3D] = {
     val n = meshes.head.pointSet.numberOfPoints
@@ -89,17 +89,17 @@ object Stage2Registration {
     for (pass <- 1 to Config.refinePasses) {
       println(s"\n=== Registration pass $pass / ${Config.refinePasses} " +
         s"(reference has ${reference.pointSet.numberOfPoints} vertices) ===")
-      val lowRankGP = NonRigidRegistration.buildMultiscaleGP(reference)
+      val lowRankGP = GPRegistrationCore.buildMultiscaleGP(reference)
       println(f"  GP prior rank = ${lowRankGP.rank} (relativeTolerance=${Config.gpRelativeTolerance}, " +
         f"maxRank=${Config.gpMaxRank})")
-      val cascade = NonRigidRegistration.defaultCascade(reference)
+      val cascade = GPRegistrationCore.defaultCascade(reference)
       val initialCoefficients = DenseVector.zeros[Double](lowRankGP.rank)
 
       registered = alignedTargets.zipWithIndex.map { case ((modelId, target), i) =>
         val t0 = System.nanoTime()
         val coeffs =
-          NonRigidRegistration.registerToTarget(lowRankGP, reference, target, initialCoefficients, cascade)
-        val mesh = NonRigidRegistration.warpedMesh(lowRankGP, reference, coeffs)
+          GPRegistrationCore.registerToTarget(lowRankGP, reference, target, initialCoefficients, cascade)
+        val mesh = GPRegistrationCore.warpedMesh(lowRankGP, reference, coeffs)
         val seconds = (System.nanoTime() - t0) / 1e9
         println(f"  [${i + 1}%2d/${alignedTargets.length}] $modelId%-20s registered in $seconds%6.1fs")
         modelId -> mesh
@@ -150,6 +150,6 @@ object Stage2Registration {
       f"rms=${avg(_.rms)}%.3f+-${sd(_.rms)}%.3f mm  hd95=${avg(_.hd95)}%.3f+-${sd(_.hd95)}%.3f mm  " +
       f"hd=${avg(_.hd)}%.3f+-${sd(_.hd)}%.3f mm")
     println(s"  wrote ${accCsv.getPath}")
-    println("\nNext: run Stage3SSMValidation.")
+    println("\nNext: run Stage3SSMModelValidation.")
   }
 }

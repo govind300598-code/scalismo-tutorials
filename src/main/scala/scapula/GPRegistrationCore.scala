@@ -31,7 +31,7 @@ import scalismo.utils.Random
  * The interactive UI callback (`gpView.coefficients = ...`) is dropped because this runs headlessly over 24
  * specimens x multiple refinement passes; nothing about the optimization itself is changed.
  */
-object NonRigidRegistration {
+object GPRegistrationCore {
 
   final case class RegistrationParameters(regularizationWeight: Double, numberOfIterations: Int, numberOfSampledPoints: Int)
 
