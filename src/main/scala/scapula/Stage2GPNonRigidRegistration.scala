@@ -49,31 +49,49 @@ object Stage2GPNonRigidRegistration {
     require(specimens.nonEmpty, s"No specimens with both a mesh and a landmark row found in ${dir.getPath}")
     println(s"${specimens.length} specimens with mesh + landmarks (expect 24 = 12 subjects x L/R)")
 
+    // ---------------------------------------------------------------------------------------- canonicalize side
+    // Left and right scapulae are mirror images of each other, not related by any rotation. Averaging their
+    // landmarks directly (as loaded) is meaningless -- a right specimen's raw GC sits on the opposite side of the
+    // body's midline from a left specimen's GC -- and rigidly aligning a right specimen onto a left reference (or
+    // vice versa) with a pure rotation cannot work; only a reflection can turn one into the other, which is exactly
+    // the doubled/backwards look you get overlaying un-mirrored L and R specimens together. So every specimen is
+    // mirrored into a single canonical side (left) here, before pivot selection or any alignment happens.
+    final case class Canonical(mesh: TriangleMesh[_3D], lms: IndexedSeq[Landmark[_3D]])
+    val canonicalById: Map[String, Canonical] = specimens.map { s =>
+      val rawMesh = ScapulaData.loadMesh(s.file)
+      val rawLms = landmarks(s.modelId)
+      val c = if (s.isRight) Canonical(ScapulaData.mirrorMesh(rawMesh), ScapulaData.mirrorLandmarks(rawLms))
+              else Canonical(rawMesh, rawLms)
+      s.modelId -> c
+    }.toMap
+    println(s"Mirrored ${specimens.count(_.isRight)} right-side specimens onto the left-side convention before " +
+      "any alignment, so every specimen being compared/averaged/aligned is in the same anatomical convention.")
+
     // -------------------------------------------------------------------------------------------------- reference
-    // Pick, deterministically, the specimen whose landmarks are closest to the population's mean landmark
-    // configuration -- a more representative starting point than an arbitrary first file, and fully reproducible.
+    // Pick, deterministically, the specimen whose (canonical) landmarks are closest to the population's mean
+    // landmark configuration -- a more representative starting point than an arbitrary first file, and reproducible.
     val meanLandmarks = ScapulaData.landmarkNames.map { name =>
-      val pts = specimens.map(s => landmarks(s.modelId).find(_.id == name).get.point)
+      val pts = specimens.map(s => canonicalById(s.modelId).lms.find(_.id == name).get.point)
       name -> Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length)
     }.toMap
     val referenceSpecimen = specimens.minBy { s =>
-      landmarks(s.modelId).map { lm =>
+      canonicalById(s.modelId).lms.map { lm =>
         val d = (lm.point - meanLandmarks(lm.id)).norm
         d * d
       }.sum
     }
-    println(s"Reference specimen (closest to mean landmark configuration): ${referenceSpecimen.modelId}")
+    println(s"Reference specimen (closest to mean landmark configuration, left-side convention): " +
+      s"${referenceSpecimen.modelId}")
 
     // ------------------------------------------------------------------------------------------------ rigid align
-    val referenceLms = landmarks(referenceSpecimen.modelId)
-    val referenceRawMesh = ScapulaData.loadMesh(referenceSpecimen.file)
+    val referenceLms = canonicalById(referenceSpecimen.modelId).lms
+    val referenceRawMesh = canonicalById(referenceSpecimen.modelId).mesh
 
     val alignedTargets: IndexedSeq[(String, TriangleMesh[_3D])] = specimens.map { s =>
-      val mesh = ScapulaData.loadMesh(s.file)
-      val lms = landmarks(s.modelId)
-      if (s.modelId == referenceSpecimen.modelId) s.modelId -> mesh
+      val c = canonicalById(s.modelId)
+      if (s.modelId == referenceSpecimen.modelId) s.modelId -> c.mesh
       else {
-        val (aligned, _) = RigidAlign.landmarkThenIcp(mesh, lms, referenceRawMesh, referenceLms, Config.icpIterations)
+        val (aligned, _) = RigidAlign.landmarkThenIcp(c.mesh, c.lms, referenceRawMesh, referenceLms, Config.icpIterations)
         s.modelId -> aligned
       }
     }

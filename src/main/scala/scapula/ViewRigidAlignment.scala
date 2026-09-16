@@ -1,6 +1,7 @@
 package scapula
 
 import scalismo.geometry.*
+import scalismo.mesh.TriangleMesh
 import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
@@ -31,27 +32,41 @@ object ViewRigidAlignment {
     require(specimens.nonEmpty, s"No specimens with both a mesh and a landmark row found in ${dir.getPath}")
     println(s"${specimens.length} specimens with mesh + landmarks")
 
+    // Left and right scapulae are mirror images, not related by any rotation -- averaging raw landmarks or rigidly
+    // aligning a right specimen onto a left reference (or vice versa) with a pure rotation cannot work, which is
+    // exactly the doubled/backwards look from overlaying un-mirrored L and R specimens together. Canonicalize every
+    // specimen onto the left-side convention first.
+    final case class Canonical(mesh: TriangleMesh[_3D], lms: IndexedSeq[Landmark[_3D]])
+    val canonicalById: Map[String, Canonical] = specimens.map { s =>
+      val rawMesh = ScapulaData.loadMesh(s.file)
+      val rawLms = landmarks(s.modelId)
+      val c = if (s.isRight) Canonical(ScapulaData.mirrorMesh(rawMesh), ScapulaData.mirrorLandmarks(rawLms))
+              else Canonical(rawMesh, rawLms)
+      s.modelId -> c
+    }.toMap
+    println(s"Mirrored ${specimens.count(_.isRight)} right-side specimens onto the left-side convention.")
+
     val meanLandmarks = ScapulaData.landmarkNames.map { name =>
-      val pts = specimens.map(s => landmarks(s.modelId).find(_.id == name).get.point)
+      val pts = specimens.map(s => canonicalById(s.modelId).lms.find(_.id == name).get.point)
       name -> Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length)
     }.toMap
     val referenceSpecimen = specimens.minBy { s =>
-      landmarks(s.modelId).map { lm =>
+      canonicalById(s.modelId).lms.map { lm =>
         val d = (lm.point - meanLandmarks(lm.id)).norm
         d * d
       }.sum
     }
-    println(s"Reference specimen (closest to mean landmark configuration): ${referenceSpecimen.modelId}")
+    println(s"Reference specimen (closest to mean landmark configuration, left-side convention): " +
+      s"${referenceSpecimen.modelId}")
 
-    val referenceLms = landmarks(referenceSpecimen.modelId)
-    val referenceRawMesh = ScapulaData.loadMesh(referenceSpecimen.file)
+    val referenceLms = canonicalById(referenceSpecimen.modelId).lms
+    val referenceRawMesh = canonicalById(referenceSpecimen.modelId).mesh
 
     val alignedTargets = specimens.map { s =>
-      val mesh = ScapulaData.loadMesh(s.file)
-      val lms = landmarks(s.modelId)
-      if (s.modelId == referenceSpecimen.modelId) s.modelId -> mesh
+      val c = canonicalById(s.modelId)
+      if (s.modelId == referenceSpecimen.modelId) s.modelId -> c.mesh
       else {
-        val (aligned, _) = RigidAlign.landmarkThenIcp(mesh, lms, referenceRawMesh, referenceLms, Config.icpIterations)
+        val (aligned, _) = RigidAlign.landmarkThenIcp(c.mesh, c.lms, referenceRawMesh, referenceLms, Config.icpIterations)
         s.modelId -> aligned
       }
     }
