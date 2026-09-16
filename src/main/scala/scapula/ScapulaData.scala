@@ -29,14 +29,13 @@ object Config {
     new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"))
 
   /**
-   * Optional external template mesh used as the SSM reference topology, instead of picking one of the 24 paired
-   * specimens (which would bias the model toward that one subject's anatomy). Defaults to the Wikimedia scapula
-   * used as the worked example in the scalismo mailing-list thread this pipeline is based on
-   * (https://commons.wikimedia.org/wiki/File:Human_scapula_1.stl). Set SCAPULA_REFERENCE_MESH="" to disable this
-   * and fall back to an in-population reference instead.
+   * Optional external template mesh to use as the SSM reference topology instead of an in-population specimen.
+   * Disabled by default -- Stage2GPNonRigidRegistration instead picks the specimen from your own 24 whose landmarks
+   * are closest to the population's mean landmark configuration (see referenceSpecimen in that file), which needs
+   * no chirality guessing since it's landmark-aligned like every other specimen. Set SCAPULA_REFERENCE_MESH to a
+   * file path to opt back into an external template if you want one later.
    */
-  val referenceMeshPath: String =
-    env("SCAPULA_REFERENCE_MESH", "/home/g25upadh/Documents/20210626175424!Human_scapula_1.stl")
+  val referenceMeshPath: String = env("SCAPULA_REFERENCE_MESH", "")
   val referenceMeshFile: Option[File] =
     if (referenceMeshPath.trim.isEmpty) None else Some(new File(referenceMeshPath))
 
