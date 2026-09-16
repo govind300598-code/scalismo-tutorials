@@ -16,9 +16,15 @@ import scala.util.Using
  */
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
+  private def envDoubles(key: String, default: Seq[Double]): Seq[Double] =
+    sys.env.get(key).map(_.split(",").map(_.trim.toDouble).toIndexedSeq).getOrElse(default)
+  private def envInts(key: String, default: Seq[Int]): Seq[Int] =
+    sys.env.get(key).map(_.split(",").map(_.trim.toInt).toIndexedSeq).getOrElse(default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  val dataDir: File =
+    new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs_scapula"))
+  val outDir: File =
+    new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_pipeline_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
@@ -47,6 +53,41 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Stage 2: non-rigid (GP) registration. Kernel length scales are DIVISORS of the reference's own bounding-box
+  // diagonal rather than fixed millimetre constants, so the same three-scale design (coarse blade / mid body /
+  // fine glenoid detail) that Dennis Madsen tuned for his example mesh (150 mm bbox: 150/2, 150/5, 150/10) rescales
+  // automatically to whatever size scapula is used as the reference.
+  // ---------------------------------------------------------------------------------------------------------------
+  val kernelCoarseDivisor: Double = env("SCAPULA_KERNEL_COARSE_DIVISOR", "2").toDouble
+  val kernelMidDivisor: Double = env("SCAPULA_KERNEL_MID_DIVISOR", "5").toDouble
+  val kernelFineDivisor: Double = env("SCAPULA_KERNEL_FINE_DIVISOR", "10").toDouble
+  val kernelCoarseScale: Double = env("SCAPULA_KERNEL_COARSE_SCALE", "15").toDouble
+  val kernelMidScale: Double = env("SCAPULA_KERNEL_MID_SCALE", "10").toDouble
+  val kernelFineScale: Double = env("SCAPULA_KERNEL_FINE_SCALE", "5").toDouble
+
+  /**
+   * Multi-resolution registration cascade (same structure as the mailing-list code: decreasing regularization weight,
+   * increasing iteration budget, denser point sampling). Sample-point fractions are of the reference's own vertex
+   * count instead of hardcoded absolute counts, so they scale with `modelResolution`.
+   */
+  val registrationSampleFractions: Seq[Double] = envDoubles("SCAPULA_REG_SAMPLE_FRACTIONS", Seq(0.2, 0.4, 0.8, 1.0))
+  val registrationRegWeights: Seq[Double] =
+    envDoubles("SCAPULA_REG_WEIGHTS", Seq(1e-1, 1e-2, 1e-4, 1e-6))
+  val registrationIterations: Seq[Int] = envInts("SCAPULA_REG_ITERS", Seq(50, 50, 100, 100))
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Stage 3: SSM validation (compactness / generalization / specificity).
+  // ---------------------------------------------------------------------------------------------------------------
+  /** Upper bound on how many modes are swept when reporting the three validation curves. */
+  val maxValidationModes: Int = env("SCAPULA_MAX_VALIDATION_MODES", "15").toInt
+
+  /** Random samples drawn per mode count when estimating specificity. */
+  val specificitySamples: Int = env("SCAPULA_SPECIFICITY_SAMPLES", "100").toInt
+
+  /** Compactness thresholds (%) at which generalization/specificity are additionally reported as single numbers. */
+  val compactnessThresholds: Seq[Double] = envDoubles("SCAPULA_COMPACTNESS_THRESHOLDS", Seq(90.0, 95.0, 99.0))
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
