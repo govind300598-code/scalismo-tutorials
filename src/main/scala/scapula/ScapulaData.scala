@@ -189,7 +189,13 @@ object Config {
   val registrationMethod: String = env("SCAPULA_REGISTRATION_METHOD", "lbfgs").toLowerCase
   val icpGprIterations: Int = env("SCAPULA_ICPGPR_ITERS", "30").toInt
   val icpGprNumPoints: Int = env("SCAPULA_ICPGPR_NUM_POINTS", "2000").toInt
-  val icpGprTrimFraction: Double = env("SCAPULA_ICPGPR_TRIM", "0.1").toDouble
+
+  /** Unlike rigid ICP, trimming the worst correspondences here is counterproductive on exactly the case this
+    * method targets: a real, large, localized deformation IS the point with the largest residual, so trimming it
+    * away discards the one training signal needed to fit it. Validated on the synthetic hard-deformation case:
+    * trim=0.1 gave a better mean (0.50mm) but a worse worst-case (34.0mm) than trim=0.0 (1.14mm mean, 29.9mm
+    * worst-case) -- since worst-case (HD95/HD) is what actually matters here, default to no trimming. */
+  val icpGprTrimFraction: Double = env("SCAPULA_ICPGPR_TRIM", "0.0").toDouble
 
   /** Observation-noise variance (mm^2) per iteration, loose -> tight. Same schedule validated on the synthetic
     * hard-deformation test case; transfers reasonably since a scapula's bounding-box scale (~150-250mm) is the
