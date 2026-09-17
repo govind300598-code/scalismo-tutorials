@@ -47,6 +47,15 @@ object Config {
     sys.env.get("SCAPULA_WATCH_SPECIMENS").map(_.split(",").map(_.trim).filter(_.nonEmpty).toIndexedSeq).getOrElse(Seq.empty)
 
   /**
+   * Restrict Stage 2 to registering ONLY this comma-separated set of specimen ids (e.g. a handful of flagged
+   * outliers), instead of every specimen in SCAPULA_DATA_DIR. The reference specimen (SCAPULA_REFERENCE_SPECIMEN, if
+   * set) is automatically included even if not listed here, since it has to be part of the run regardless. Leave
+   * unset ("") to process every specimen, as normal.
+   */
+  val onlySpecimenIds: Option[Set[String]] =
+    sys.env.get("SCAPULA_ONLY_SPECIMENS").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSet).filter(_.nonEmpty)
+
+  /**
    * Optional external template mesh to use as the SSM reference topology instead of an in-population specimen.
    * Disabled by default -- Stage2GPNonRigidRegistration instead picks the specimen from your own 24 whose landmarks
    * are closest to the population's mean landmark configuration (see referenceSpecimen in that file), which needs

@@ -45,9 +45,23 @@ object Stage2GPNonRigidRegistration {
     println(s"Output dir     : ${Config.outDir.getAbsolutePath}")
 
     val (landmarks, _, _) = ScapulaData.readLandmarkCsv(csv)
-    val specimens = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
-    require(specimens.nonEmpty, s"No specimens with both a mesh and a landmark row found in ${dir.getPath}")
-    println(s"${specimens.length} specimens with mesh + landmarks (expect 24 = 12 subjects x L/R)")
+    val allSpecimens = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
+    require(allSpecimens.nonEmpty, s"No specimens with both a mesh and a landmark row found in ${dir.getPath}")
+
+    val specimens = Config.onlySpecimenIds match {
+      case Some(ids) =>
+        val wanted = ids ++ Config.referenceSpecimenId.toSet // the reference must be in the run regardless
+        val filtered = allSpecimens.filter(s => wanted.contains(s.modelId))
+        val missing = wanted -- filtered.map(_.modelId).toSet
+        require(missing.isEmpty, s"SCAPULA_ONLY_SPECIMENS/SCAPULA_REFERENCE_SPECIMEN name unknown id(s): " +
+          s"${missing.mkString(", ")} -- available: ${allSpecimens.map(_.modelId).mkString(", ")}")
+        println(s"SCAPULA_ONLY_SPECIMENS set -- restricting this run to ${filtered.length} of " +
+          s"${allSpecimens.length} specimens: ${filtered.map(_.modelId).mkString(", ")}")
+        filtered
+      case None => allSpecimens
+    }
+    println(s"${specimens.length} specimens with mesh + landmarks (expect 24 = 12 subjects x L/R, unless " +
+      "SCAPULA_ONLY_SPECIMENS restricted this run)")
 
     // ---------------------------------------------------------------------------------------- canonicalize side
     // Left and right scapulae are mirror images of each other, not related by any rotation. Averaging their
