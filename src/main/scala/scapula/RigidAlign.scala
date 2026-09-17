@@ -130,6 +130,63 @@ object RigidAlign {
     candidates.minBy(_._2.mean)
   }
 
+  /**
+   * Generalized Procrustes Analysis (Gower 1975) over landmark configurations only -- the classical definition of
+   * GPA, applied here because the raw specimens are not yet in point correspondence (different STL vertex
+   * counts/order), so scalismo's own mesh-level DataCollection.gpa (which requires a shared domain) does not apply
+   * until AFTER Stage 2's non-rigid registration has already run.
+   *
+   * Without this, "the reference frame" is whichever one real specimen happens to be picked as the pivot -- every
+   * other specimen is aligned to THAT INDIVIDUAL's own raw pose, which is a bias (arbitrary though the individual's
+   * shape itself is well-motivated to pick). GPA instead iterates: align every specimen's landmarks to the current
+   * mean configuration, recompute the mean from the newly aligned landmarks, repeat until the mean stops moving.
+   * The result is a population mean pose that is not tied to any single specimen's own coordinate frame.
+   *
+   * Returns the converged mean landmark configuration -- not a real mesh, since it is now a purely statistical
+   * construct with no associated surface, hence still requires a real specimen's mesh (whichever is closest to it)
+   * to serve as the actual ICP-refinement target surface downstream.
+   */
+  def landmarkGPA(
+      landmarksById: Map[String, IndexedSeq[Landmark[_3D]]],
+      maxIterations: Int = 10,
+      haltDistanceMm: Double = 0.01
+  ): IndexedSeq[Landmark[_3D]] = {
+    val ids = landmarksById.keys.toIndexedSeq
+    require(ids.nonEmpty, "landmarkGPA needs at least one specimen")
+    val landmarkNames = landmarksById(ids.head).map(_.id)
+
+    def meanOf(configs: IndexedSeq[IndexedSeq[Landmark[_3D]]]): IndexedSeq[Landmark[_3D]] =
+      landmarkNames.map { name =>
+        val pts = configs.map(cfg => cfg.find(_.id == name).get.point)
+        Landmark(name, Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length))
+      }
+
+    // Start from an arbitrary specimen's own configuration as the initial alignment target -- GPA's result does not
+    // depend on this choice, only the path to convergence does.
+    var target: IndexedSeq[Landmark[_3D]] = landmarksById(ids.head)
+    var previousMeanPoints: Option[IndexedSeq[Point[_3D]]] = None
+    var iteration = 0
+    var converged = false
+
+    while (iteration < maxIterations && !converged) {
+      val aligned = ids.map { id =>
+        val lms = landmarksById(id)
+        val t = ScapulaData.rigidFromLandmarks(lms, target)
+        lms.map(lm => lm.copy(point = t(lm.point)))
+      }
+      val newMean = meanOf(aligned)
+      val newMeanPoints = newMean.map(_.point)
+      previousMeanPoints.foreach { prev =>
+        val maxShift = prev.zip(newMeanPoints).map { case (a, b) => (a - b).norm }.max
+        if (maxShift < haltDistanceMm) converged = true
+      }
+      previousMeanPoints = Some(newMeanPoints)
+      target = newMean
+      iteration += 1
+    }
+    target
+  }
+
   /** Landmark Procrustes followed by trimmed rigid ICP. Returns the aligned mesh and the aligned landmarks. */
   def landmarkThenIcp(mesh: TriangleMesh[_3D],
                       lms: IndexedSeq[Landmark[_3D]],

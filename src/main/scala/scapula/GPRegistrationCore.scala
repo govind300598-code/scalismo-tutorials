@@ -54,9 +54,10 @@ object GPRegistrationCore {
   }
 
   /**
-   * Sum of three Gaussian kernels (coarse blade / mid body / fine glenoid detail), diagonal over the 3 output
-   * dimensions, matching `kernelCoarse + kernelFine` (extended to three scales) and `DiagonalKernel3D(..., outputDim
-   * = 3)` from the original code.
+   * Sum of four Gaussian kernels (coarse blade / mid body / fine glenoid detail / ultra-fine glenoid rim & coracoid),
+   * diagonal over the 3 output dimensions, matching `kernelCoarse + kernelFine` (extended to four scales) and
+   * `DiagonalKernel3D(..., outputDim = 3)` from the original code. The 4th scale directly targets the small
+   * structures Loane Le Gall's original mailing-list post wanted more precision on.
    */
   def buildMultiscaleGP(reference: TriangleMesh[_3D])(implicit rng: Random): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
     val points = reference.pointSet.points.toIndexedSeq
@@ -73,7 +74,8 @@ object GPRegistrationCore {
     val kernelCoarse = GaussianKernel3D(diag / Config.kernelCoarseDivisor, Config.kernelCoarseScale)
     val kernelMid = GaussianKernel3D(diag / Config.kernelMidDivisor, Config.kernelMidScale)
     val kernelFine = GaussianKernel3D(diag / Config.kernelFineDivisor, Config.kernelFineScale)
-    val kernelFinal = kernelCoarse + kernelMid + kernelFine
+    val kernelUltraFine = GaussianKernel3D(diag / Config.kernelUltraFineDivisor, Config.kernelUltraFineScale)
+    val kernelFinal = kernelCoarse + kernelMid + kernelFine + kernelUltraFine
     val kernel = DiagonalKernel3D(kernelFinal, outputDim = 3)
 
     val zeroMean = Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector.zeros[_3D])

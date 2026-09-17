@@ -103,6 +103,17 @@ object Config {
   val kernelFineScale: Double = env("SCAPULA_KERNEL_FINE_SCALE", "5").toDouble
 
   /**
+   * Fourth, ultra-fine kernel scale (divisor ~20 -> length scale of a couple cm on a ~200mm scapula, narrowing
+   * further toward sub-cm as SCAPULA_MODEL_RES increases and can actually resolve it) targeting small structures the
+   * original three scales are too coarse for -- specifically the glenoid rim and coracoid process, the exact detail
+   * Loane Le Gall's original mailing-list post wanted more precision on. Small scale factor (2, vs. 5/10/15 for the
+   * other three) since fine-detail deformation should be a small correction on top of the coarser scales, not a
+   * dominant one -- a large scale factor here would let the optimizer chase per-vertex noise instead of anatomy.
+   */
+  val kernelUltraFineDivisor: Double = env("SCAPULA_KERNEL_ULTRAFINE_DIVISOR", "20").toDouble
+  val kernelUltraFineScale: Double = env("SCAPULA_KERNEL_ULTRAFINE_SCALE", "2").toDouble
+
+  /**
    * Multi-resolution registration cascade (same structure as the mailing-list code: decreasing regularization weight,
    * increasing iteration budget, denser point sampling). Sample-point fractions are of the reference's own vertex
    * count instead of hardcoded absolute counts, so they scale with `modelResolution`.

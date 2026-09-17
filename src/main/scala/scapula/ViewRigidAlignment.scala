@@ -46,31 +46,35 @@ object ViewRigidAlignment {
     }.toMap
     println(s"Mirrored ${specimens.count(_.isRight)} right-side specimens onto the left-side convention.")
 
-    val meanLandmarks = ScapulaData.landmarkNames.map { name =>
-      val pts = specimens.map(s => canonicalById(s.modelId).lms.find(_.id == name).get.point)
-      name -> Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length)
-    }.toMap
+    // GPA (Generalized Procrustes Analysis) over landmarks: iteratively re-estimate the population mean landmark
+    // configuration instead of aligning everyone to one arbitrary real specimen's own raw pose -- see
+    // RigidAlign.landmarkGPA and Stage2GPNonRigidRegistration's matching comment for why.
+    val canonicalLandmarksById = specimens.map(s => s.modelId -> canonicalById(s.modelId).lms).toMap
+    val gpaMeanLandmarks = RigidAlign.landmarkGPA(canonicalLandmarksById)
+    val gpaMeanByName = gpaMeanLandmarks.map(lm => lm.id -> lm.point).toMap
     val referenceSpecimen = specimens.minBy { s =>
       canonicalById(s.modelId).lms.map { lm =>
-        val d = (lm.point - meanLandmarks(lm.id)).norm
+        val d = (lm.point - gpaMeanByName(lm.id)).norm
         d * d
       }.sum
     }
-    println(s"Reference specimen (closest to mean landmark configuration, left-side convention): " +
+    println(s"Reference specimen (closest to GPA mean landmark configuration, left-side convention): " +
       s"${referenceSpecimen.modelId}")
 
-    val referenceLms = canonicalById(referenceSpecimen.modelId).lms
-    val referenceRawMesh = canonicalById(referenceSpecimen.modelId).mesh
+    val refCanonical = canonicalById(referenceSpecimen.modelId)
+    val refToGpaMean = ScapulaData.rigidFromLandmarks(refCanonical.lms, gpaMeanLandmarks)
+    val referenceRawMesh = refCanonical.mesh.transform(refToGpaMean)
+    val referenceLms = refCanonical.lms.map(lm => lm.copy(point = refToGpaMean(lm.point)))
 
     val alignedTargets = specimens.map { s =>
       val c = canonicalById(s.modelId)
-      if (s.modelId == referenceSpecimen.modelId) s.modelId -> c.mesh
+      if (s.modelId == referenceSpecimen.modelId) s.modelId -> referenceRawMesh
       else {
         val (aligned, _) = RigidAlign.landmarkThenIcp(c.mesh, c.lms, referenceRawMesh, referenceLms, Config.icpIterations)
         s.modelId -> aligned
       }
     }
-    println(s"Rigidly aligned all ${alignedTargets.length} specimens into the reference's landmark frame.")
+    println(s"Rigidly aligned all ${alignedTargets.length} specimens into the GPA mean landmark frame.")
 
     if (Config.showUi) {
       val ui = ScalismoUI()

@@ -41,15 +41,18 @@ object ViewPipelineStages {
               else Canonical(rawMesh, rawLms)
       s.modelId -> c
     }.toMap
-    val meanLandmarks = ScapulaData.landmarkNames.map { name =>
-      val pts = specimens.map(s => canonicalById(s.modelId).lms.find(_.id == name).get.point)
-      name -> Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length)
-    }.toMap
+    // GPA over landmarks (RigidAlign.landmarkGPA) instead of aligning everyone to one arbitrary specimen's own raw
+    // pose -- see Stage2GPNonRigidRegistration's matching comment for why.
+    val canonicalLandmarksById = specimens.map(s => s.modelId -> canonicalById(s.modelId).lms).toMap
+    val gpaMeanLandmarks = RigidAlign.landmarkGPA(canonicalLandmarksById)
+    val gpaMeanByName = gpaMeanLandmarks.map(lm => lm.id -> lm.point).toMap
     val pivotSpecimen = specimens.minBy { s =>
-      canonicalById(s.modelId).lms.map { lm => val d = (lm.point - meanLandmarks(lm.id)).norm; d * d }.sum
+      canonicalById(s.modelId).lms.map { lm => val d = (lm.point - gpaMeanByName(lm.id)).norm; d * d }.sum
     }
-    val pivotLms = canonicalById(pivotSpecimen.modelId).lms
-    val pivotMesh = canonicalById(pivotSpecimen.modelId).mesh
+    val pivotCanonical = canonicalById(pivotSpecimen.modelId)
+    val pivotToGpaMean = ScapulaData.rigidFromLandmarks(pivotCanonical.lms, gpaMeanLandmarks)
+    val pivotMesh = pivotCanonical.mesh.transform(pivotToGpaMean)
+    val pivotLms = pivotCanonical.lms.map(lm => lm.copy(point = pivotToGpaMean(lm.point)))
 
     val inspectId = sys.env.getOrElse("SCAPULA_INSPECT_SPECIMEN", pivotSpecimen.modelId)
     val inspectSpecimen = specimens.find(_.modelId == inspectId).getOrElse(
@@ -61,10 +64,10 @@ object ViewPipelineStages {
     // ---- stage 1: raw ----
     val rawMesh = ScapulaData.loadMesh(inspectSpecimen.file)
 
-    // ---- stage 2: canonicalized (mirrored if right) + rigidly aligned onto the pivot ----
+    // ---- stage 2: canonicalized (mirrored if right) + rigidly aligned onto the GPA mean frame ----
     val canon = canonicalById(inspectSpecimen.modelId)
     val rigidAligned =
-      if (inspectSpecimen.modelId == pivotSpecimen.modelId) canon.mesh
+      if (inspectSpecimen.modelId == pivotSpecimen.modelId) pivotMesh
       else RigidAlign.landmarkThenIcp(canon.mesh, canon.lms, pivotMesh, pivotLms, Config.icpIterations)._1
 
     // ---- stage 3 + 4: reference and registered mesh, read from Stage 2's saved output if it has been run ----

@@ -68,34 +68,39 @@ object Stage2GPNonRigidRegistration {
       "any alignment, so every specimen being compared/averaged/aligned is in the same anatomical convention.")
 
     // -------------------------------------------------------------------------------------------------- reference
-    // Pick, deterministically, the specimen whose (canonical) landmarks are closest to the population's mean
-    // landmark configuration -- a more representative starting point than an arbitrary first file, and reproducible.
-    val meanLandmarks = ScapulaData.landmarkNames.map { name =>
-      val pts = specimens.map(s => canonicalById(s.modelId).lms.find(_.id == name).get.point)
-      name -> Point3D(pts.map(_.x).sum / pts.length, pts.map(_.y).sum / pts.length, pts.map(_.z).sum / pts.length)
-    }.toMap
+    // Generalized Procrustes Analysis over landmarks (RigidAlign.landmarkGPA): iteratively re-estimate the
+    // population's mean landmark configuration, instead of aligning everyone to one arbitrary real specimen's own
+    // raw pose. That mean is a statistical construct with no surface of its own, so the specimen whose landmarks
+    // land closest to it is still picked to supply the actual reference MESH -- but that specimen's mesh is then
+    // itself rigidly moved onto the GPA mean (via landmark Procrustes) before anyone, including itself, is ICP-
+    // refined against it, which is what actually removes the "one real specimen defines the frame" bias.
+    val canonicalLandmarksById = specimens.map(s => s.modelId -> canonicalById(s.modelId).lms).toMap
+    val gpaMeanLandmarks = RigidAlign.landmarkGPA(canonicalLandmarksById)
+    val gpaMeanByName = gpaMeanLandmarks.map(lm => lm.id -> lm.point).toMap
     val referenceSpecimen = specimens.minBy { s =>
       canonicalById(s.modelId).lms.map { lm =>
-        val d = (lm.point - meanLandmarks(lm.id)).norm
+        val d = (lm.point - gpaMeanByName(lm.id)).norm
         d * d
       }.sum
     }
-    println(s"Reference specimen (closest to mean landmark configuration, left-side convention): " +
+    println(s"Reference specimen (closest to GPA mean landmark configuration, left-side convention): " +
       s"${referenceSpecimen.modelId}")
 
     // ------------------------------------------------------------------------------------------------ rigid align
-    val referenceLms = canonicalById(referenceSpecimen.modelId).lms
-    val referenceRawMesh = canonicalById(referenceSpecimen.modelId).mesh
+    val refCanonical = canonicalById(referenceSpecimen.modelId)
+    val refToGpaMean = ScapulaData.rigidFromLandmarks(refCanonical.lms, gpaMeanLandmarks)
+    val referenceRawMesh = refCanonical.mesh.transform(refToGpaMean)
+    val referenceLms = refCanonical.lms.map(lm => lm.copy(point = refToGpaMean(lm.point)))
 
     val alignedTargets: IndexedSeq[(String, TriangleMesh[_3D])] = specimens.map { s =>
       val c = canonicalById(s.modelId)
-      if (s.modelId == referenceSpecimen.modelId) s.modelId -> c.mesh
+      if (s.modelId == referenceSpecimen.modelId) s.modelId -> referenceRawMesh
       else {
         val (aligned, _) = RigidAlign.landmarkThenIcp(c.mesh, c.lms, referenceRawMesh, referenceLms, Config.icpIterations)
         s.modelId -> aligned
       }
     }
-    println(s"Rigidly aligned all ${alignedTargets.length} specimens into the reference's landmark frame " +
+    println(s"Rigidly aligned all ${alignedTargets.length} specimens into the GPA mean landmark frame " +
       s"(${Config.icpIterations} ICP iterations after landmark Procrustes).")
 
     // --------------------------------------------------------------------------------------- reference topology
