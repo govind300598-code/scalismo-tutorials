@@ -171,6 +171,31 @@ object Config {
 
   /** Compactness thresholds (%) at which generalization/specificity are additionally reported as single numbers. */
   val compactnessThresholds: Seq[Double] = envDoubles("SCAPULA_COMPACTNESS_THRESHOLDS", Seq(90.0, 95.0, 99.0))
+
+  // ---------------------------------------------------------------------------------------------------------------
+  // Stage 2 registration METHOD. "lbfgs" (default) is the original mailing-list doRegistration approach --
+  // GaussianProcessTransformationSpace + MeanSquaresMetric + L2Regularizer + LBFGSOptimizer, one continuous
+  // gradient-based fit. It works well when a specimen differs from the reference by many SMALL deformations
+  // spread across the surface, but structurally underfits a specimen with one LARGE, spatially localized
+  // deformation (confirmed via SyntheticParamExperiment: six different cascade/kernel settings left the
+  // worst-case error on such a case essentially unchanged, ~43mm). "icp-gpr" instead does what ICP does for rigid
+  // alignment, but non-rigidly, via GPRegistrationCore.icpGprRegister: iterative closest-point correspondence +
+  // closed-form Gaussian process regression (LowRankGaussianProcess.posterior), annealing observation noise from
+  // loose to tight -- the "ICP-GPR" instance of GiNGR (Madsen et al. 2022), the same mailing-list author's own
+  // successor method. On the same synthetic hard case it cut mean correspondence error by ~87% and worst-case by
+  // ~20%, so it is the better default for a population with genuine outlier anatomy -- but "lbfgs" is kept as the
+  // default here so nothing about already-validated results changes without an explicit opt-in.
+  // ---------------------------------------------------------------------------------------------------------------
+  val registrationMethod: String = env("SCAPULA_REGISTRATION_METHOD", "lbfgs").toLowerCase
+  val icpGprIterations: Int = env("SCAPULA_ICPGPR_ITERS", "30").toInt
+  val icpGprNumPoints: Int = env("SCAPULA_ICPGPR_NUM_POINTS", "2000").toInt
+  val icpGprTrimFraction: Double = env("SCAPULA_ICPGPR_TRIM", "0.1").toDouble
+
+  /** Observation-noise variance (mm^2) per iteration, loose -> tight. Same schedule validated on the synthetic
+    * hard-deformation test case; transfers reasonably since a scapula's bounding-box scale (~150-250mm) is the
+    * same order of magnitude as that test's. */
+  val icpGprSigma2Schedule: Seq[Double] =
+    envDoubles("SCAPULA_ICPGPR_SIGMA2_SCHEDULE", Seq(100.0, 50.0, 20.0, 10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05))
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

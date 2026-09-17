@@ -225,14 +225,25 @@ object Stage2GPNonRigidRegistration {
       val lowRankGP = GPRegistrationCore.buildMultiscaleGP(reference)
       println(f"  GP prior rank = ${lowRankGP.rank} (relativeTolerance=${Config.gpRelativeTolerance}, " +
         f"maxRank=${Config.gpMaxRank})")
+      println(s"  Registration method: ${Config.registrationMethod}")
       val cascade = GPRegistrationCore.defaultCascade(reference)
       val initialCoefficients = DenseVector.zeros[Double](lowRankGP.rank)
 
       registered = alignedTargets.zipWithIndex.map { case ((modelId, target), i) =>
         val t0 = System.nanoTime()
-        val coeffs =
-          GPRegistrationCore.registerToTarget(lowRankGP, reference, target, initialCoefficients, cascade)
-        val mesh = GPRegistrationCore.warpedMesh(lowRankGP, reference, coeffs)
+        val mesh = Config.registrationMethod match {
+          case "icp-gpr" =>
+            GPRegistrationCore.icpGprRegister(
+              lowRankGP, reference, target,
+              Config.icpGprIterations, Config.icpGprSigma2Schedule.toIndexedSeq,
+              Config.icpGprNumPoints, Config.icpGprTrimFraction
+            )
+          case "lbfgs" =>
+            val coeffs = GPRegistrationCore.registerToTarget(lowRankGP, reference, target, initialCoefficients, cascade)
+            GPRegistrationCore.warpedMesh(lowRankGP, reference, coeffs)
+          case other =>
+            throw new RuntimeException(s"Unknown SCAPULA_REGISTRATION_METHOD='$other' -- expected 'lbfgs' or 'icp-gpr'")
+        }
         val seconds = (System.nanoTime() - t0) / 1e9
         println(f"  [${i + 1}%2d/${alignedTargets.length}] $modelId%-20s registered in $seconds%6.1fs")
         modelId -> mesh
