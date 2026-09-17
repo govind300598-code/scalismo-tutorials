@@ -77,14 +77,24 @@ object Stage2GPNonRigidRegistration {
     val canonicalLandmarksById = specimens.map(s => s.modelId -> canonicalById(s.modelId).lms).toMap
     val gpaMeanLandmarks = RigidAlign.landmarkGPA(canonicalLandmarksById)
     val gpaMeanByName = gpaMeanLandmarks.map(lm => lm.id -> lm.point).toMap
-    val referenceSpecimen = specimens.minBy { s =>
-      canonicalById(s.modelId).lms.map { lm =>
-        val d = (lm.point - gpaMeanByName(lm.id)).norm
-        d * d
-      }.sum
+    val referenceSpecimen = Config.referenceSpecimenId match {
+      case Some(id) =>
+        val s = specimens.find(_.modelId == id).getOrElse(throw new RuntimeException(
+          s"SCAPULA_REFERENCE_SPECIMEN='$id' not found among specimens: ${specimens.map(_.modelId).mkString(", ")}"
+        ))
+        println(s"Reference specimen: $id (forced via SCAPULA_REFERENCE_SPECIMEN, not GPA-selected)")
+        s
+      case None =>
+        val s = specimens.minBy { s =>
+          canonicalById(s.modelId).lms.map { lm =>
+            val d = (lm.point - gpaMeanByName(lm.id)).norm
+            d * d
+          }.sum
+        }
+        println(s"Reference specimen (closest to GPA mean landmark configuration, left-side convention): " +
+          s"${s.modelId}")
+        s
     }
-    println(s"Reference specimen (closest to GPA mean landmark configuration, left-side convention): " +
-      s"${referenceSpecimen.modelId}")
 
     // ------------------------------------------------------------------------------------------------ rigid align
     val refCanonical = canonicalById(referenceSpecimen.modelId)
@@ -231,6 +241,37 @@ object Stage2GPNonRigidRegistration {
       f"rms=${avg(_.rms)}%.3f+-${sd(_.rms)}%.3f mm  hd95=${avg(_.hd95)}%.3f+-${sd(_.hd95)}%.3f mm  " +
       f"hd=${avg(_.hd)}%.3f+-${sd(_.hd)}%.3f mm")
     println(s"  wrote ${accCsv.getPath}")
+
+    // ------------------------------------------------------------------------------------------ watchlist specimens
+    // Specimens called out separately (e.g. flagged as outliers by an external variation analysis) -- same numbers
+    // as in registration_accuracy.csv above, just pulled out into their own section/file since these are exactly
+    // the specimens most likely to expose a registration weakness (an outlier's real anatomy is, by definition,
+    // furthest from the reference the GP deformation has to stretch to reach).
+    if (Config.watchSpecimenIds.nonEmpty) {
+      val accuracyById = accuracy.toMap
+      println(s"\n[watchlist] ${Config.watchSpecimenIds.length} specimen(s) called out via SCAPULA_WATCH_SPECIMENS:")
+      val watchRows = Config.watchSpecimenIds.map { id =>
+        accuracyById.get(id) match {
+          case Some(s) =>
+            println(f"  $id%-24s ${s.render}")
+            id -> Some(s)
+          case None =>
+            println(f"  $id%-24s !! not found among registered specimens")
+            id -> None
+        }
+      }
+      val watchCsv = new File(Config.outDir, "registration_accuracy_watchlist.csv")
+      val wpw = new PrintWriter(watchCsv)
+      try {
+        wpw.println("model_id,mean_mm,rms_mm,hd95_mm,hd_mm")
+        watchRows.foreach {
+          case (id, Some(s)) => wpw.println(f"$id,${s.mean}%.4f,${s.rms}%.4f,${s.hd95}%.4f,${s.hd}%.4f")
+          case (id, None)    => wpw.println(s"$id,,,,")
+        }
+      } finally wpw.close()
+      println(s"  wrote ${watchCsv.getPath}")
+    }
+
     println("\nNext: run Stage3SSMModelValidation.")
   }
 }

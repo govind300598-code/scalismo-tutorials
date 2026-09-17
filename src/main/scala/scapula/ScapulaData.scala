@@ -29,6 +29,24 @@ object Config {
     new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"))
 
   /**
+   * Force a specific specimen (by model id, e.g. paired_scapula_005_F_67_R) as the reference, instead of Stage 2's
+   * own GPA-based selection (closest to the population's iteratively-estimated mean landmark configuration). Useful
+   * when a "most average" specimen has already been identified by an external analysis. Leave unset ("") to keep
+   * the automatic GPA-based selection.
+   */
+  val referenceSpecimenId: Option[String] =
+    sys.env.get("SCAPULA_REFERENCE_SPECIMEN").map(_.trim).filter(_.nonEmpty)
+
+  /**
+   * Comma-separated specimen ids (e.g. flagged outliers from an external variation analysis) to call out separately
+   * in Stage 2's registration-accuracy report: printed as their own highlighted section plus written to
+   * registration_accuracy_watchlist.csv, in addition to appearing in the full registration_accuracy.csv like every
+   * other specimen. Leave unset ("") to skip this extra section entirely.
+   */
+  val watchSpecimenIds: Seq[String] =
+    sys.env.get("SCAPULA_WATCH_SPECIMENS").map(_.split(",").map(_.trim).filter(_.nonEmpty).toIndexedSeq).getOrElse(Seq.empty)
+
+  /**
    * Optional external template mesh to use as the SSM reference topology instead of an in-population specimen.
    * Disabled by default -- Stage2GPNonRigidRegistration instead picks the specimen from your own 24 whose landmarks
    * are closest to the population's mean landmark configuration (see referenceSpecimen in that file), which needs
