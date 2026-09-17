@@ -127,6 +127,17 @@ object Stage2GPNonRigidRegistration {
     println(s"Rigidly aligned all ${alignedTargets.length} specimens into the GPA mean landmark frame " +
       s"(${Config.icpIterations} ICP iterations after landmark Procrustes).")
 
+    // Persisted so downstream viewers (e.g. ViewRegistrationHeatmap) can compute per-vertex registered-vs-real-target
+    // error without recomputing rigid alignment themselves -- a recompute would not be bit-identical anyway, since
+    // ICP's point sampling depends on how many prior calls have already advanced the shared RNG stream.
+    Config.outDir.mkdirs()
+    val alignedTargetsDir = new File(Config.outDir, "aligned_targets")
+    alignedTargetsDir.mkdirs()
+    alignedTargets.foreach { case (modelId, mesh) =>
+      MeshIO.writeMesh(mesh, new File(alignedTargetsDir, s"$modelId.vtk")).get
+    }
+    println(s"Wrote ${alignedTargets.length} rigidly-aligned (pre-registration) target meshes to ${alignedTargetsDir.getPath}")
+
     // --------------------------------------------------------------------------------------- reference topology
     // Prefer an external template mesh (default: the Wikimedia scapula from the mailing-list thread) over one of
     // the 24 paired specimens, so the SSM's topology is not biased toward any one subject's anatomy. The template
