@@ -91,6 +91,16 @@ object Config {
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
+  /**
+   * A registered mesh's per-point displacement from the reference is a real anatomical deformation, so it is
+   * bounded by how different a scapula can plausibly be from the reference (tens of mm at most). Above this bound
+   * it is not a "big deformation" -- it means the file is not actually in correspondence with the current
+   * reference.vtk (e.g. a stale registered/<id>.vtk left over from an earlier run against a different reference
+   * topology). Used by Stage3SSMModelValidation.loadRegistered as a loud, actionable failure instead of silently
+   * feeding garbage correspondence into PCA.
+   */
+  val maxPlausibleDisplacementMm: Double = env("SCAPULA_MAX_PLAUSIBLE_DISPLACEMENT_MM", "60.0").toDouble
+
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
 

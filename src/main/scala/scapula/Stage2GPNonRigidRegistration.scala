@@ -24,6 +24,22 @@ import java.io.{File, PrintWriter}
  */
 object Stage2GPNonRigidRegistration {
 
+  // Every Stage 2 run writes a complete, self-consistent population (one reference topology, one registered mesh
+  // per specimen IN THIS RUN). A directory left over from a PRIOR run (e.g. a full 24-specimen run, followed by a
+  // SCAPULA_ONLY_SPECIMENS-restricted run) can still contain other specimens' .vtk files registered against a
+  // DIFFERENT reference.vtk (different pivot specimen / different decimation -> different vertex correspondence,
+  // even at the same vertex COUNT). Stage3's loadRegistered only checks vertex count, so those stale files would be
+  // silently loaded alongside the fresh ones and PCA'd as if they were in correspondence with the current
+  // reference -- producing a shattered, self-intersecting "noise" mesh with no relation to real anatomy. Clearing
+  // the directory at the start of every run is what actually prevents that, not any registration/kernel parameter.
+  private def clearStaleVtkFiles(dir: File): Unit = {
+    val stale = Option(dir.listFiles()).getOrElse(Array.empty[File]).filter(_.getName.toLowerCase.endsWith(".vtk"))
+    if (stale.nonEmpty) {
+      stale.foreach(_.delete())
+      println(s"  cleared ${stale.length} stale .vtk file(s) from a previous run in ${dir.getPath}")
+    }
+  }
+
   private def meanMesh(meshes: IndexedSeq[TriangleMesh[_3D]], triangles: TriangleList): TriangleMesh[_3D] = {
     val n = meshes.head.pointSet.numberOfPoints
     val m = meshes.length.toDouble
@@ -133,6 +149,7 @@ object Stage2GPNonRigidRegistration {
     Config.outDir.mkdirs()
     val alignedTargetsDir = new File(Config.outDir, "aligned_targets")
     alignedTargetsDir.mkdirs()
+    clearStaleVtkFiles(alignedTargetsDir)
     alignedTargets.foreach { case (modelId, mesh) =>
       MeshIO.writeMesh(mesh, new File(alignedTargetsDir, s"$modelId.vtk")).get
     }
@@ -231,6 +248,7 @@ object Stage2GPNonRigidRegistration {
     Config.outDir.mkdirs()
     val registeredDir = new File(Config.outDir, "registered")
     registeredDir.mkdirs()
+    clearStaleVtkFiles(registeredDir)
     MeshIO.writeMesh(reference, new File(Config.outDir, "reference.vtk")).get
     registered.foreach { case (modelId, mesh) =>
       MeshIO.writeMesh(mesh, new File(registeredDir, s"$modelId.vtk")).get

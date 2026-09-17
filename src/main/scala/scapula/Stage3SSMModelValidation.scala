@@ -49,11 +49,28 @@ object Stage3SSMModelValidation {
     require(files.nonEmpty, s"No registered meshes found in ${registeredDir.getPath} -- run Stage2GPNonRigidRegistration first.")
 
     val meshes = files.toIndexedSeq.map(f => f.getName.stripSuffix(".vtk") -> ScapulaData.loadMesh(f))
+    val referencePoints = reference.pointSet.points.toIndexedSeq
     meshes.foreach { case (id, m) =>
       require(
         m.pointSet.numberOfPoints == reference.pointSet.numberOfPoints,
         s"$id has ${m.pointSet.numberOfPoints} points, reference has ${reference.pointSet.numberOfPoints} points " +
           "-- these meshes are not in correspondence."
+      )
+      // Same point COUNT does not imply correspondence: a stale registered/<id>.vtk left over from an earlier
+      // Stage 2 run (different reference topology/decimation) can coincidentally match the current reference's
+      // vertex count while every point index means something anatomically unrelated. A real registered mesh's
+      // per-point displacement from the reference is bounded by actual anatomical variation; anything past
+      // Config.maxPlausibleDisplacementMm is a correspondence bug, not a big deformation, and PCA on it produces
+      // the shattered/self-intersecting "noise" mesh reported against this pipeline before -- fail loudly instead.
+      val maxDisplacement = referencePoints.indices.map(i => (m.pointSet.point(scalismo.common.PointId(i)) - referencePoints(i)).norm).max
+      require(
+        maxDisplacement <= Config.maxPlausibleDisplacementMm,
+        s"$id has a max per-point displacement from reference.vtk of ${"%.1f".format(maxDisplacement)} mm, above " +
+          s"the ${Config.maxPlausibleDisplacementMm} mm plausibility bound (SCAPULA_MAX_PLAUSIBLE_DISPLACEMENT_MM). " +
+          s"This means $id is NOT actually in correspondence with the current reference.vtk -- almost always a " +
+          s"stale file left over in ${registeredDir.getPath} from an earlier Stage2GPNonRigidRegistration run " +
+          "against a different reference topology. Rerun Stage2GPNonRigidRegistration (it now clears this " +
+          "directory itself before writing) rather than trusting this directory's current contents."
       )
     }
     (reference, meshes)
