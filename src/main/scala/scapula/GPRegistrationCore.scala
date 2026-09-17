@@ -128,4 +128,68 @@ object GPRegistrationCore {
     val transformationSpace = GaussianProcessTransformationSpace(lowRankGP)
     referenceMesh.transform(transformationSpace.transformationForParameters(coefficients))
   }
+
+  /**
+   * Iterative closest-point Gaussian process regression (ICP-GPR) registration -- an alternative to
+   * [[registerToTarget]]'s single continuous LBFGS fit, for the case that fit structurally struggles with: a
+   * target with one large, spatially localized deformation from the reference (as opposed to many small ones
+   * spread across the whole surface). Root cause: MeanSquaresMetric averages residuals over ALL sampled points,
+   * so a small badly-fit region contributes little to the gradient and the optimizer settles for a smoothed-out
+   * partial fit -- confirmed empirically (see SyntheticParamExperiment): six different settings of the existing
+   * cascade (more iterations, less regularization, larger kernel amplitude, higher GP rank) left the worst-case
+   * error essentially unchanged on a synthetic "one big local bump" test case.
+   *
+   * This instead does what ICP does for RIGID alignment, but non-rigidly: at each iteration, find the closest
+   * point on the target surface for a sample of reference points (a direct, per-point pull toward wherever the
+   * true surface actually is -- no averaging-away of a small badly-fit region), then take the closed-form
+   * POSTERIOR of the ORIGINAL prior GP given those correspondences as noisy observations
+   * (`LowRankGaussianProcess.posterior`, exact Gaussian process regression, no gradient descent / no local-minimum
+   * risk from an optimizer trajectory). The observation noise (`sigma2Schedule`) is annealed from loose to tight
+   * across iterations, exactly as in Amberg et al.'s "Optimal Step Non-Rigid ICP" and the "ICP-GPR" instance of
+   * GiNGR (Madsen et al. 2022, the same author's own successor to the mailing-list `doRegistration` approach this
+   * pipeline otherwise replicates) -- early iterations trust the (likely wrong) correspondences loosely, later
+   * iterations trust the (by-then-refined) correspondences tightly.
+   *
+   * The posterior is always computed from the ORIGINAL `priorGP`, never a posterior-of-a-posterior, which is both
+   * simpler and numerically safer. `warpedMesh(posteriorGP, referenceMesh, zeros)` extracts each iteration's
+   * posterior MEAN shape (deterministic part, no sampling) to warp forward into the next iteration.
+   */
+  def icpGprRegister(
+      priorGP: LowRankGaussianProcess[_3D, EuclideanVector[_3D]],
+      referenceMesh: TriangleMesh[_3D],
+      target: TriangleMesh[_3D],
+      iterations: Int,
+      sigma2Schedule: IndexedSeq[Double],
+      numPoints: Int,
+      trimFraction: Double
+  )(implicit rng: Random): TriangleMesh[_3D] = {
+    require(iterations > 0, "icpGprRegister needs at least one iteration")
+    val sampleIds = FixedPointsUniformMeshSampler3D(referenceMesh, numPoints)
+      .sample()
+      .map { case (pt, _) => referenceMesh.pointSet.findClosestPoint(pt).id }
+      .distinct
+
+    var currentMesh = referenceMesh
+    for (iter <- 0 until iterations) {
+      val sigma2 = sigma2Schedule(math.min(iter, sigma2Schedule.length - 1))
+      val targetOps = target.operations
+
+      val pairs = sampleIds.map { id =>
+        val refPt = referenceMesh.pointSet.point(id)
+        val curPt = currentMesh.pointSet.point(id)
+        val closest = targetOps.closestPointOnSurface(curPt).point
+        (refPt, curPt, closest)
+      }
+      // Trim the worst correspondences before regressing, same rationale as RigidAlign.rigidIcp: a handful of
+      // bad matches (e.g. a point currently far from any true correspondence) would otherwise pull the whole
+      // posterior toward a wrong displacement.
+      val keep = math.max(10, (pairs.length * (1.0 - trimFraction)).toInt)
+      val trimmed = pairs.sortBy { case (_, cur, closest) => (cur - closest).norm }.take(keep)
+
+      val trainingData = trimmed.map { case (refPt, _, closest) => (refPt, closest - refPt) }
+      val posteriorGP = priorGP.posterior(trainingData, sigma2)
+      currentMesh = warpedMesh(posteriorGP, referenceMesh, DenseVector.zeros[Double](posteriorGP.rank))
+    }
+    currentMesh
+  }
 }
