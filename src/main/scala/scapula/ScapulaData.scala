@@ -367,8 +367,23 @@ object Metrics {
     sorted(idx)
   }
 
-  final case class SurfaceStats(mean: Double, rms: Double, hd95: Double, hd: Double) {
-    def render: String = f"mean=$mean%5.2f  rms=$rms%5.2f  HD95=$hd95%5.2f  HD=$hd%6.2f"
+  final case class SurfaceStats(mean: Double, rms: Double, hd95: Double, hd: Double, chamfer: Double) {
+    def render: String = f"mean=$mean%5.2f  rms=$rms%5.2f  HD95=$hd95%5.2f  HD=$hd%6.2f  Chamfer=$chamfer%6.2f"
+  }
+
+  /**
+   * Chamfer distance (mm^2): mean squared nearest-point distance in EACH direction, summed -- the standard
+   * point-cloud/mesh-comparison definition. Deliberately NOT the same computation as `mean`/`rms` below, which pool
+   * both directions' distances into one set before averaging; Chamfer keeps the two directions separate (so a
+   * denser point set on one side doesn't implicitly get more weight in the combined average) and sums their
+   * mean-squared values rather than pooling them.
+   */
+  def chamferDistance(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    def meanSquared(from: TriangleMesh[_3D], to: TriangleMesh[_3D]): Double = {
+      val d = surfaceDistances(from, to)
+      d.map(x => x * x).sum / d.length
+    }
+    meanSquared(a, b) + meanSquared(b, a)
   }
 
   /** Symmetric statistics: both directions pooled, which is what "distance between two surfaces" should mean. */
@@ -378,7 +393,8 @@ object Metrics {
       mean = d.sum / d.length,
       rms = math.sqrt(d.map(x => x * x).sum / d.length),
       hd95 = percentile(d, 0.95),
-      hd = d.max
+      hd = d.max,
+      chamfer = chamferDistance(a, b)
     )
   }
 

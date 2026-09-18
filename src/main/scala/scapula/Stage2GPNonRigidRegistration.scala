@@ -281,8 +281,8 @@ object Stage2GPNonRigidRegistration {
     val accCsv = new File(Config.outDir, "registration_accuracy.csv")
     val pw = new PrintWriter(accCsv)
     try {
-      pw.println("model_id,mean_mm,rms_mm,hd95_mm,hd_mm")
-      accuracy.foreach { case (id, s) => pw.println(f"$id,${s.mean}%.4f,${s.rms}%.4f,${s.hd95}%.4f,${s.hd}%.4f") }
+      pw.println("model_id,mean_mm,rms_mm,hd95_mm,hd_mm,chamfer_mm2")
+      accuracy.foreach { case (id, s) => pw.println(f"$id,${s.mean}%.4f,${s.rms}%.4f,${s.hd95}%.4f,${s.hd}%.4f,${s.chamfer}%.4f") }
     } finally pw.close()
 
     val n = accuracy.length
@@ -293,7 +293,7 @@ object Stage2GPNonRigidRegistration {
     }
     println(f"\n  POPULATION (n=$n): mean=${avg(_.mean)}%.3f+-${sd(_.mean)}%.3f mm  " +
       f"rms=${avg(_.rms)}%.3f+-${sd(_.rms)}%.3f mm  hd95=${avg(_.hd95)}%.3f+-${sd(_.hd95)}%.3f mm  " +
-      f"hd=${avg(_.hd)}%.3f+-${sd(_.hd)}%.3f mm")
+      f"hd=${avg(_.hd)}%.3f+-${sd(_.hd)}%.3f mm  chamfer=${avg(_.chamfer)}%.3f+-${sd(_.chamfer)}%.3f mm^2")
     println(s"  wrote ${accCsv.getPath}")
 
     // ------------------------------------------------------------------------------------------ watchlist specimens
@@ -317,10 +317,10 @@ object Stage2GPNonRigidRegistration {
       val watchCsv = new File(Config.outDir, "registration_accuracy_watchlist.csv")
       val wpw = new PrintWriter(watchCsv)
       try {
-        wpw.println("model_id,mean_mm,rms_mm,hd95_mm,hd_mm")
+        wpw.println("model_id,mean_mm,rms_mm,hd95_mm,hd_mm,chamfer_mm2")
         watchRows.foreach {
-          case (id, Some(s)) => wpw.println(f"$id,${s.mean}%.4f,${s.rms}%.4f,${s.hd95}%.4f,${s.hd}%.4f")
-          case (id, None)    => wpw.println(s"$id,,,,")
+          case (id, Some(s)) => wpw.println(f"$id,${s.mean}%.4f,${s.rms}%.4f,${s.hd95}%.4f,${s.hd}%.4f,${s.chamfer}%.4f")
+          case (id, None)    => wpw.println(s"$id,,,,,")
         }
       } finally wpw.close()
       println(s"  wrote ${watchCsv.getPath}")
