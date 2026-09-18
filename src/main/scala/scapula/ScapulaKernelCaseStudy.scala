@@ -194,12 +194,12 @@ object ScapulaKernelCaseStudy {
           ui.show(allGroup, mesh, s"$id (registered)")
           ui.show(allGroup, targetById(id), s"$id (real target)")
         }
-        val (bestMesh, _, _) = results.find(_._1 == bestId).get
+        val (_, bestMesh, _) = results.find(_._1 == bestId).get
         val bestGroup = ui.createGroup(s"$caseLabel - BEST ($bestId)")
         ui.show(bestGroup, bestMesh, s"$bestId (registered)")
         ui.show(bestGroup, targetById(bestId), s"$bestId (real target)")
 
-        val (worstMesh, _, _) = results.find(_._1 == worstId).get
+        val (_, worstMesh, _) = results.find(_._1 == worstId).get
         val worstGroup = ui.createGroup(s"$caseLabel - WORST ($worstId)")
         ui.show(worstGroup, worstMesh, s"$worstId (registered)")
         ui.show(worstGroup, targetById(worstId), s"$worstId (real target)")
