@@ -1,7 +1,7 @@
 package scapula
 
 import breeze.linalg.DenseVector
-import scalismo.common.{Field, RealSpace}
+import scalismo.common.Field
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D, PDKernel}
@@ -105,8 +105,8 @@ object NonRigidRegistration {
       .map(s => GaussianKernel3D(s.sigma, scaleFactor = s.scale): PDKernel[_3D])
       .reduce(_ + _)
     val kernel   = DiagonalKernel3D(scalarKernel, outputDim = 3)
-    // RealSpace[_3D] is the unbounded R³ domain; explicit type params avoid vectorizer ambiguity
-    val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D], _ => EuclideanVector.zeros[_3D])
+    // EuclideanSpace[_3D] is the unbounded R³ domain; explicit type params avoid vectorizer ambiguity
+    val zeroMean = Field[_3D, EuclideanVector[_3D]](EuclideanSpace[_3D], _ => EuclideanVector.zeros[_3D])
     val gp       = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
     LowRankGaussianProcess.approximateGPCholesky(
       reference, gp,
@@ -288,7 +288,7 @@ object NonRigidRegistration {
     println("NON-RIGID REGISTRATION METRICS  (all distances in mm)  [BEST=lowest post-CD  WORST=highest post-CD]")
     println("=" * 150)
     println(
-      f"${"Model"}%-${w}s  " +
+      f"${"Model"}%-32s  " +
       f"${"pre-mean"}%8s  ${"pre-CD"}%8s  ${"pre-HD"}%8s  " +
       f"${"post-mean"}%9s  ${"post-CD"}%8s  ${"post-HD"}%9s  " +
       f"${"p2p-mean"}%9s  ${"p2p-CD"}%8s  " +
@@ -300,7 +300,7 @@ object NonRigidRegistration {
     rows.foreach { r =>
       val tag = if (r.modelId == bestId) " <BEST" else if (r.modelId == worstId) " <WORST" else ""
       println(
-        f"${r.modelId}%-${w}s  " +
+        f"${r.modelId}%-32s  " +
         f"${r.preMean}%8.2f  ${r.preCd}%8.2f  ${r.preHd}%8.2f  " +
         f"${r.postMean}%9.2f  ${r.postCd}%8.2f  ${r.postHd}%9.2f  " +
         f"${r.p2pMean}%9.2f  ${r.p2pCd}%8.2f  " +
@@ -314,7 +314,7 @@ object NonRigidRegistration {
       if (vs.isEmpty) Double.NaN else vs.sum / vs.length
     }
     println(
-      f"${"MEAN"}%-${w}s  " +
+      f"${"MEAN"}%-32s  " +
       f"${avg(_.preMean)}%8.2f  ${avg(_.preCd)}%8.2f  ${avg(_.preHd)}%8.2f  " +
       f"${avg(_.postMean)}%9.2f  ${avg(_.postCd)}%8.2f  ${avg(_.postHd)}%9.2f  " +
       f"${avg(_.p2pMean)}%9.2f  ${avg(_.p2pCd)}%8.2f  " +
