@@ -429,41 +429,70 @@ object NonRigidRegistration {
 
     targets.zipWithIndex.foreach { case (spec, idx) =>
       println(s"\n[${idx + 1}/${targets.length}] ${spec.modelId}")
+      println(s"  ── pre-processing ──────────────────────────────────────────")
 
-      // Mirror right → left
+      // ── 0. Mirror right → left space ────────────────────────────────────
       val rawMesh = ScapulaData.loadMesh(spec.file)
       val rawLms  = landmarks(spec.modelId)
       val (oriented, orientedLms) =
-        if (spec.isRight)
+        if (spec.isRight) {
+          println(s"  [0] Mirror right → left")
           (ScapulaData.mirrorMesh(rawMesh), ScapulaData.mirrorLandmarks(rawLms))
-        else
+        } else {
+          println(s"  [0] Left side – no mirror needed")
           (rawMesh, rawLms)
+        }
 
-      // Rigid alignment – returns aligned mesh and aligned landmarks
-      val (rigid, rigidLms) = RigidAlign.landmarkThenIcp(
-        oriented, orientedLms, reference, refLms, icpIterations = Config.icpIterations
+      // ── STEP 1. Landmark-based rigid registration (Procrustes) ──────────
+      // Finds the best rigid transform that maps the 5 annotated landmarks
+      // (GC, TS, IA, PLA, AC) on the moving mesh onto the same landmarks on
+      // the reference.  This gives a coarse but anatomically grounded pose.
+      println(s"  [1] Landmark rigid registration (Procrustes, ${refLms.length} landmarks)")
+      val lmTransform  = ScapulaData.rigidFromLandmarks(orientedLms, refLms)
+      val afterLm      = oriented.transform(lmTransform)
+      val afterLmLandmarks = orientedLms.map(lm => lm.copy(point = lmTransform(lm.point)))
+      val lmStats      = Metrics.symmetric(afterLm, reference)
+      println(f"     after LM Procrustes : ${lmStats.render}")
+
+      // ── STEP 2. Automatic trimmed ICP (rigid refinement) ─────────────────
+      // Runs from the landmark-initialised pose.  Uses a spatially uniform
+      // point sample so thin structures (acromion, coracoid) are not
+      // systematically missed. Trims the worst 15 % of correspondences so
+      // partially non-overlapping regions do not corrupt the rotation.
+      println(s"  [2] Automatic trimmed ICP  (${Config.icpIterations} iters)")
+      val rigid     = RigidAlign.rigidIcp(afterLm, reference, Config.icpIterations)
+      // Carry the landmarks along with the ICP motion
+      val icpMotion = scalismo.registration.LandmarkRegistration.rigid3DLandmarkRegistration(
+        afterLm.pointSet.points.zip(rigid.pointSet.points).toIndexedSeq,
+        center = scalismo.geometry.Point3D(0, 0, 0)
       )
+      val rigidLms  = afterLmLandmarks.map(lm => lm.copy(point = icpMotion(lm.point)))
+      val preStats  = Metrics.symmetric(rigid, reference)
+      println(f"     after ICP           : ${preStats.render}")
+      val preLmDists = lmDistances(rigidLms, refLms)
+      println(s"     landmark errors     : " +
+        ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
 
-      // Show rigid surface + its landmarks
+      // Show rigid surface + carried landmarks in UI
       ui.zip(grpUnreg).foreach { case (u, g) =>
         u.show(g, rigid, s"${spec.modelId}_rigid")
         rigidLms.foreach(lm => u.show(g, lm, s"${spec.modelId}_${lm.id}"))
       }
 
-      // Pre-registration metrics
-      val preStats   = Metrics.symmetric(rigid, reference)
-      val preLmDists = lmDistances(rigidLms, refLms)
-
-      // Non-rigid registration (GP prior, no conditioning)
+      // ── STEP 3. Multiscale GP non-rigid registration ──────────────────────
+      // Uses the GP prior (3-term Madsen kernel) as the transformation space.
+      // Runs 4 passes with decreasing regularisation weight so the deformation
+      // moves from coarse global shape to fine local detail.
+      println(s"  ── non-rigid (GP-ICP, 4 passes) ────────────────────────────")
       val (regMesh, _) = registerOne(lrgp, reference, rigid, spec.modelId)
       regMeshMap(spec.modelId) = regMesh
 
-      // Show registered surface
+      // Show registered surface in UI
       ui.zip(grpReg).foreach { case (u, g) =>
         u.show(g, regMesh, s"${spec.modelId}_reg")
       }
 
-      // Post-registration metrics (reg vs rigid target — shape fit quality)
+      // Post-registration surface metrics (registered mesh vs the rigid target)
       val postStats   = Metrics.symmetric(regMesh, rigid)
       val postLmDists = lmErrorOnMesh(reference, regMesh, refLms, rigidLms)
 
@@ -471,14 +500,15 @@ object NonRigidRegistration {
       val p2pDists = Metrics.correspondingDistances(regMesh, reference)
       val p2pMean  = p2pDists.sum / p2pDists.length
       val p2pRms   = math.sqrt(p2pDists.map(x => x * x).sum / p2pDists.length)
-      val p2pCd    = p2pMean * 2.0  // vertex-to-vertex symmetric; CD = sum of both directional means
+      val p2pCd    = p2pMean * 2.0
 
-      println(f"    PRE  rigid vs ref  : ${preStats.render}")
-      println(f"    POST reg  vs rigid : ${postStats.render}")
-      println(f"    P2P  reg  vs ref   : mean=${p2pMean}%.2f mm  RMSE=${p2pRms}%.2f mm  CD=${p2pCd}%.2f mm")
-      println(s"    PRE  lm dists (mm) : " +
+      println(f"  ── results ─────────────────────────────────────────────────")
+      println(f"     PRE  rigid   vs ref  : ${preStats.render}")
+      println(f"     POST nonrig  vs rigid: ${postStats.render}")
+      println(f"     P2P  nonrig  vs ref  : mean=${p2pMean}%.2f mm  RMSE=${p2pRms}%.2f mm  CD=${p2pCd}%.2f mm")
+      println(s"     PRE  lm dists (mm)   : " +
         ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-      println(s"    POST lm dists (mm) : " +
+      println(s"     POST lm dists (mm)   : " +
         ScapulaData.landmarkNames.map(n => f"$n=${postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
 
       val row = RegMetrics(
