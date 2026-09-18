@@ -2,7 +2,7 @@ package scapula
 
 import scalismo.geometry.*
 import scalismo.common.*
-import scalismo.common.interpolation.NearestNeighborInterpolator3D
+import scalismo.common.interpolation.TriangleMeshInterpolator3D
 import scalismo.mesh.*
 import scalismo.registration.*
 import scalismo.io.MeshIO
@@ -137,7 +137,7 @@ object Stage2NonRigidReg {
       refMesh,
       gp,
       Config.gpRelativeTolerance,
-      NearestNeighborInterpolator3D[TriangleMesh[_3D], EuclideanVector[_3D]]()
+      TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
     println(s"    GP rank=${lowRankGP.rank}  σ=${gpParams.sigma}  s=${gpParams.scaleFactor}")
 
