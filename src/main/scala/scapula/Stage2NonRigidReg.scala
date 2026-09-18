@@ -134,10 +134,10 @@ object Stage2NonRigidReg {
     val gp = GaussianProcess(zeroMean, kernel)
 
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
-      referenceMesh     = refMesh,
-      gp                = gp,
-      relativeTolerance = Config.gpRelativeTolerance,
-      interpolator      = NearestNeighborInterpolator3D[EuclideanVector[_3D]]()
+      refMesh,
+      gp,
+      Config.gpRelativeTolerance,
+      NearestNeighborInterpolator3D[TriangleMesh[_3D], EuclideanVector[_3D]]()
     )
     println(s"    GP rank=${lowRankGP.rank}  σ=${gpParams.sigma}  s=${gpParams.scaleFactor}")
 
@@ -164,7 +164,7 @@ object Stage2NonRigidReg {
       targetMesh: TriangleMesh[_3D],
       regParams: RegistrationParameters,
       initialCoefficients: DenseVector[Double]
-  ): DenseVector[Double] = {
+  )(implicit rng: Random): DenseVector[Double] = {
     val transformationSpace = GaussianProcessTransformationSpace(posteriorGP)
     val fixedImage          = referenceMesh.operations.toDistanceImage
     val movingImage         = targetMesh.operations.toDistanceImage
