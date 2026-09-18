@@ -343,8 +343,9 @@ object NonRigidRegistration {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
-    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))
-    val runTag    = s"nonrigid_$timestamp"
+    // Millisecond timestamp + 4-hex random tag → unique across parallel runs
+    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss-SSS"))
+    val runTag    = s"nr_${timestamp}_${"%04x".format(rng.scalaRandom.nextInt(0xffff))}"
 
     val dir    = Config.dataDir
     val outDir = new File(Config.outDir, runTag)
