@@ -1,7 +1,7 @@
 package scapula
 
 import breeze.linalg.DenseVector
-import scalismo.common.Field
+import scalismo.common.{Field, RealSpace}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
 import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D, PDKernel}
@@ -106,7 +106,7 @@ object NonRigidRegistration {
       .reduce(_ + _)
     val kernel   = DiagonalKernel3D(scalarKernel, outputDim = 3)
     // EuclideanSpace[_3D] is the unbounded R³ domain; explicit type params avoid vectorizer ambiguity
-    val zeroMean = Field[_3D, EuclideanVector[_3D]](EuclideanSpace[_3D], _ => EuclideanVector.zeros[_3D])
+    val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D], _ => EuclideanVector.zeros[_3D])
     val gp       = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
     LowRankGaussianProcess.approximateGPCholesky(
       reference, gp,
