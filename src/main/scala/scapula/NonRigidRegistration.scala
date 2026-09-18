@@ -44,6 +44,22 @@ import java.time.format.DateTimeFormatter
 object NonRigidRegistration {
 
   // ----------------------------------------------------------
+  //  Dataset selection
+  //  The six specimens used in the validation run (Table 1).
+  //  005_F_67_R is the fixed reference; the other five are targets.
+  //  Set to None to process every specimen in the data directory.
+  // ----------------------------------------------------------
+  val selectedSpecimens: Option[Set[String]] = Some(Set(
+    "001_M_64_L",
+    "002_M_56_L",
+    "005_F_67_R",
+    "006_F_60_R",
+    "007_M_26_L",
+    "008_F_73_L"
+  ))
+  val fixedReferenceId: Option[String] = Some("005_F_67_R")
+
+  // ----------------------------------------------------------
   //  Kernel configuration
   // ----------------------------------------------------------
   final case class KernelSpec(sigma: Double, scale: Double, tag: String)
@@ -349,12 +365,29 @@ object NonRigidRegistration {
     if (!fromHeader)
       println("  WARN: landmark columns resolved by fallback offsets – verify CSV")
 
-    val allSpecimens = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
+    val allWithLandmarks = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
+    val allSpecimens = selectedSpecimens match {
+      case None       => allWithLandmarks
+      case Some(ids)  =>
+        val filtered = allWithLandmarks.filter(s => ids.contains(s.modelId))
+        val missing  = ids -- filtered.map(_.modelId).toSet
+        if (missing.nonEmpty)
+          println(s"  WARN: selected specimens not found in data dir: ${missing.mkString(", ")}")
+        filtered
+    }
     require(allSpecimens.nonEmpty, s"No specimens with landmarks in ${dir.getAbsolutePath}")
-    println(s" Specimens with landmarks: ${allSpecimens.length}")
+    println(s" Specimens selected: ${allSpecimens.length}  (of ${allWithLandmarks.length} total with landmarks)")
+    allSpecimens.foreach(s => println(s"   ${if (s.isRight) "R" else "L"} ${s.modelId}"))
 
     // ── Reference ─────────────────────────────────────────────────────────
-    val refSpec   = allSpecimens.find(!_.isRight).getOrElse(allSpecimens.head)
+    val refSpec = fixedReferenceId match {
+      case Some(id) =>
+        allSpecimens.find(_.modelId == id).getOrElse {
+          throw new RuntimeException(s"Fixed reference '$id' not found among selected specimens")
+        }
+      case None =>
+        allSpecimens.find(!_.isRight).getOrElse(allSpecimens.head)
+    }
     val refRaw    = ScapulaData.loadMesh(refSpec.file)
     val reference = refRaw.operations.decimate(Config.modelResolution)
     val refLms    = landmarks(refSpec.modelId)
