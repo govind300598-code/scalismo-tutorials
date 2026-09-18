@@ -388,6 +388,8 @@ object NonRigidRegistration {
     // ── Registration loop ─────────────────────────────────────────────────
     val targets    = allSpecimens.filterNot(_.modelId == refSpec.modelId)
     val allMetrics = scala.collection.mutable.ListBuffer[RegMetrics]()
+    // Keep registered meshes so we can highlight best/worst in the UI after the loop
+    val regMeshMap = scala.collection.mutable.Map[String, TriangleMesh[_3D]]()
 
     val mw = new PrintWriter(new File(logDir, "registration_metrics.csv"))
     mw.println(csvHeader)
@@ -421,28 +423,29 @@ object NonRigidRegistration {
 
       // Non-rigid registration (GP prior, no conditioning)
       val (regMesh, _) = registerOne(lrgp, reference, rigid, spec.modelId)
+      regMeshMap(spec.modelId) = regMesh
 
       // Show registered surface
       ui.zip(grpReg).foreach { case (u, g) =>
         u.show(g, regMesh, s"${spec.modelId}_reg")
       }
 
-      // Post-registration metrics
+      // Post-registration metrics (reg vs rigid target — shape fit quality)
       val postStats   = Metrics.symmetric(regMesh, rigid)
       val postLmDists = lmErrorOnMesh(reference, regMesh, refLms, rigidLms)
 
-      // Point-to-point metrics (regMesh shares reference topology)
+      // Point-to-point metrics (regMesh shares reference topology — deformation magnitude)
       val p2pDists = Metrics.correspondingDistances(regMesh, reference)
       val p2pMean  = p2pDists.sum / p2pDists.length
       val p2pRms   = math.sqrt(p2pDists.map(x => x * x).sum / p2pDists.length)
-      val p2pCd    = p2pMean * 2.0  // vertex-to-vertex is symmetric; CD = sum of both directional means
+      val p2pCd    = p2pMean * 2.0  // vertex-to-vertex symmetric; CD = sum of both directional means
 
-      println(f"    PRE  (rigid vs ref)    : ${preStats.render}")
-      println(f"    POST (reg vs target)   : ${postStats.render}")
-      println(f"    P2P  (reg vs ref)      : mean=${p2pMean}%.2f  RMS=${p2pRms}%.2f  CD=${p2pCd}%.2f mm")
-      println(s"    PRE  lm dists (mm)  : " +
+      println(f"    PRE  rigid vs ref  : ${preStats.render}")
+      println(f"    POST reg  vs rigid : ${postStats.render}")
+      println(f"    P2P  reg  vs ref   : mean=${p2pMean}%.2f mm  RMSE=${p2pRms}%.2f mm  CD=${p2pCd}%.2f mm")
+      println(s"    PRE  lm dists (mm) : " +
         ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-      println(s"    POST lm dists (mm)  : " +
+      println(s"    POST lm dists (mm) : " +
         ScapulaData.landmarkNames.map(n => f"$n=${postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
 
       val row = RegMetrics(
@@ -471,6 +474,45 @@ object NonRigidRegistration {
     val rows = allMetrics.toSeq
     printMetricsTable(rows)
     printLmDistSummary(rows)
+
+    // ── Best / worst highlight ────────────────────────────────────────────
+    if (rows.nonEmpty) {
+      val bestRow  = rows.minBy(_.postCd)
+      val worstRow = rows.maxBy(_.postCd)
+
+      println()
+      println("*" * 90)
+      println("  BEST REGISTRATION  (lowest post-CD — most accurate shape fit)")
+      println("*" * 90)
+      println(f"  Specimen : ${bestRow.modelId}")
+      println(f"  POST  mean=${bestRow.postMean}%.2f mm  RMSE=${bestRow.postRms}%.2f mm  CD=${bestRow.postCd}%.2f mm  HD=${bestRow.postHd}%.2f mm")
+      println(f"  P2P   mean=${bestRow.p2pMean}%.2f mm  RMSE=${bestRow.p2pRms}%.2f mm  CD=${bestRow.p2pCd}%.2f mm")
+      println(s"  POST lm: " +
+        lmNames.map(n => f"$n=${bestRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+      println()
+      println("*" * 90)
+      println("  WORST REGISTRATION  (highest post-CD — hardest shape to fit)")
+      println("*" * 90)
+      println(f"  Specimen : ${worstRow.modelId}")
+      println(f"  POST  mean=${worstRow.postMean}%.2f mm  RMSE=${worstRow.postRms}%.2f mm  CD=${worstRow.postCd}%.2f mm  HD=${worstRow.postHd}%.2f mm")
+      println(f"  P2P   mean=${worstRow.p2pMean}%.2f mm  RMSE=${worstRow.p2pRms}%.2f mm  CD=${worstRow.p2pCd}%.2f mm")
+      println(s"  POST lm: " +
+        lmNames.map(n => f"$n=${worstRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+
+      // Show best and worst in dedicated UI groups for visual comparison
+      for {
+        u           <- ui
+        bestMesh    <- regMeshMap.get(bestRow.modelId)
+        worstMesh   <- regMeshMap.get(worstRow.modelId)
+      } {
+        val grpBest  = u.createGroup(s"BEST_${bestRow.modelId}")
+        val grpWorst = u.createGroup(s"WORST_${worstRow.modelId}")
+        u.show(grpBest,  reference, "reference")
+        u.show(grpBest,  bestMesh,  s"${bestRow.modelId}_reg")
+        u.show(grpWorst, reference, "reference")
+        u.show(grpWorst, worstMesh, s"${worstRow.modelId}_reg")
+      }
+    }
 
     // ── Summary file ──────────────────────────────────────────────────────
     val rw = new PrintWriter(new File(logDir, "summary.txt"))
