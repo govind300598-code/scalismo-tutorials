@@ -153,11 +153,13 @@ object Stage1Diagnostics {
     println("=" * 100)
     if (withinPairs.nonEmpty && betweenPairs.nonEmpty) {
       val wMean = withinPairs.map(_.mean).sum / withinPairs.length
-      val wHd = withinPairs.map(_.hd).sum / withinPairs.length
+      val wCd   = withinPairs.map(_.chamfer).sum / withinPairs.length
+      val wHd   = withinPairs.map(_.hd).sum / withinPairs.length
       val bMean = betweenPairs.map(_.mean).sum / betweenPairs.length
-      val bHd = betweenPairs.map(_.hd).sum / betweenPairs.length
-      println(f"  within-subject  (same person, L vs mirrored R) : mean=$wMean%5.2f mm   Hausdorff=$wHd%6.2f mm")
-      println(f"  between-subject (different people)             : mean=$bMean%5.2f mm   Hausdorff=$bHd%6.2f mm")
+      val bCd   = betweenPairs.map(_.chamfer).sum / betweenPairs.length
+      val bHd   = betweenPairs.map(_.hd).sum / betweenPairs.length
+      println(f"  within-subject  (same person, L vs mirrored R) : mean=$wMean%5.2f mm   CD=$wCd%6.2f mm   Hausdorff=$wHd%6.2f mm")
+      println(f"  between-subject (different people)             : mean=$bMean%5.2f mm   CD=$bCd%6.2f mm   Hausdorff=$bHd%6.2f mm")
       println()
       if (wHd < bHd * 0.7) {
         println("  The within-subject distance is clearly smaller than the between-subject distance.")

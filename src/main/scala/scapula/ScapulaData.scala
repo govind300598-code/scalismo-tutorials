@@ -212,18 +212,30 @@ object Metrics {
     sorted(idx)
   }
 
-  final case class SurfaceStats(mean: Double, rms: Double, hd95: Double, hd: Double) {
-    def render: String = f"mean=$mean%5.2f  rms=$rms%5.2f  HD95=$hd95%5.2f  HD=$hd%6.2f"
+  /**
+   * CD(A,B) = (1/|A|)Σ_a min_b ||a-b|| + (1/|B|)Σ_b min_a ||b-a||
+   * Each direction contributes its own mean; the result is the sum of both.
+   */
+  def chamfer(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): Double = {
+    val dAB = surfaceDistances(a, b)
+    val dBA = surfaceDistances(b, a)
+    dAB.sum / dAB.length + dBA.sum / dBA.length
   }
 
-  /** Symmetric statistics: both directions pooled, which is what "distance between two surfaces" should mean. */
+  final case class SurfaceStats(mean: Double, rms: Double, chamfer: Double, hd: Double) {
+    def render: String = f"mean=$mean%5.2f  rms=$rms%5.2f  CD=$chamfer%6.2f  HD=$hd%6.2f"
+  }
+
+  /** Symmetric statistics: both directions pooled. */
   def symmetric(a: TriangleMesh[_3D], b: TriangleMesh[_3D]): SurfaceStats = {
-    val d = surfaceDistances(a, b) ++ surfaceDistances(b, a)
+    val dAB = surfaceDistances(a, b)
+    val dBA = surfaceDistances(b, a)
+    val d   = dAB ++ dBA
     SurfaceStats(
-      mean = d.sum / d.length,
-      rms = math.sqrt(d.map(x => x * x).sum / d.length),
-      hd95 = percentile(d, 0.95),
-      hd = d.max
+      mean    = d.sum / d.length,
+      rms     = math.sqrt(d.map(x => x * x).sum / d.length),
+      chamfer = dAB.sum / dAB.length + dBA.sum / dBA.length,
+      hd      = d.max
     )
   }
 
