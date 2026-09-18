@@ -1,10 +1,10 @@
 package scapula
 
 import breeze.linalg.DenseVector
-import scalismo.common.Field
+import scalismo.common.{Field, RealSpace}
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
 import scalismo.geometry.*
-import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D}
+import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D, PDKernel}
 import scalismo.mesh.TriangleMesh
 import scalismo.numerics.{FixedPointsUniformMeshSampler3D, LBFGSOptimizer}
 import scalismo.registration.{GaussianProcessTransformationSpace, L2Regularizer, MeanSquaresMetric, Registration}
@@ -64,12 +64,21 @@ object NonRigidRegistration {
   // ----------------------------------------------------------
   final case class KernelSpec(sigma: Double, scale: Double, tag: String)
 
-  // Dennis Madsen's 3-term scheme: σ = L/2, L/5, L/10  (L≈150 mm for scapula)
-  val kernelSpecs: Seq[KernelSpec] = Seq(
+  // Case A – Dennis Madsen's full 3-term scheme: σ = L/2, L/5, L/10
+  val kernels3: Seq[KernelSpec] = Seq(
     KernelSpec(sigma = 75.0, scale = 15.0, tag = "Coarse"),
     KernelSpec(sigma = 30.0, scale = 10.0, tag = "Mid"),
     KernelSpec(sigma = 15.0, scale =  5.0, tag = "Fine")
   )
+
+  // Case B – 2-term (drop Mid): Coarse captures global shape, Fine captures glenoid detail
+  val kernels2: Seq[KernelSpec] = Seq(
+    KernelSpec(sigma = 75.0, scale = 15.0, tag = "Coarse"),
+    KernelSpec(sigma = 15.0, scale =  5.0, tag = "Fine")
+  )
+
+  // Active kernel set — kept for printKernelTable compatibility
+  val kernelSpecs: Seq[KernelSpec] = kernels3
 
   // ----------------------------------------------------------
   //  ICP cascade: 4 passes, decreasing regularisation
@@ -91,12 +100,14 @@ object NonRigidRegistration {
     specs:       Seq[KernelSpec],
     relativeTol: Double
   ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
-    val scalarKernel = specs
-      .map(s => GaussianKernel3D(s.sigma, scalingFactor = s.scale))
+    // scaleFactor (not scalingFactor); upcast to PDKernel so + is well-typed
+    val scalarKernel: PDKernel[_3D] = specs
+      .map(s => GaussianKernel3D(s.sigma, scaleFactor = s.scale): PDKernel[_3D])
       .reduce(_ + _)
     val kernel   = DiagonalKernel3D(scalarKernel, outputDim = 3)
-    val zeroMean = Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector.zeros[_3D])
-    val gp       = GaussianProcess(zeroMean, kernel)
+    // RealSpace[_3D] is the unbounded R³ domain; explicit type params avoid vectorizer ambiguity
+    val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D], _ => EuclideanVector.zeros[_3D])
+    val gp       = GaussianProcess[_3D, EuclideanVector[_3D]](zeroMean, kernel)
     LowRankGaussianProcess.approximateGPCholesky(
       reference, gp,
       relativeTolerance = relativeTol,
@@ -337,6 +348,181 @@ object NonRigidRegistration {
   }
 
   // ----------------------------------------------------------
+  //  Run one complete case (kernel set → all 5 targets)
+  // ----------------------------------------------------------
+  def runCase(
+    caseLabel: String,
+    specs:     Seq[KernelSpec],
+    reference: TriangleMesh[_3D],
+    refLms:    IndexedSeq[Landmark[_3D]],
+    targets:   IndexedSeq[ScapulaData.Specimen],
+    landmarks: Map[String, IndexedSeq[Landmark[_3D]]],
+    regDir:    File,
+    logDir:    File,
+    ui:        Option[scalismo.ui.api.ScalismoUI]
+  )(implicit rng: Random): Seq[RegMetrics] = {
+
+    println()
+    println("#" * 90)
+    println(s"  CASE: $caseLabel  (${specs.length} kernels)")
+    println("#" * 90)
+
+    printKernelTable(specs, 0, Config.gpRelativeTolerance)  // rank printed after build
+    printCascadeTable()
+
+    println(s"\nBuilding GP prior for $caseLabel …")
+    val lrgp = buildLRGP(reference, specs, Config.gpRelativeTolerance)
+    println(s"  GP rank = ${lrgp.rank}")
+
+    // Kernel config CSV
+    val kw = new PrintWriter(new File(logDir, s"kernel_config_${caseLabel}.csv"))
+    kw.println("level,sigma_mm,scale,relativeTol,gp_rank")
+    specs.foreach(s => kw.println(s"${s.tag},${s.sigma},${s.scale},${Config.gpRelativeTolerance},${lrgp.rank}"))
+    kw.close()
+
+    // UI groups for this case
+    val grpUnreg = ui.map(_.createGroup(s"${caseLabel}_rigid"))
+    val grpReg   = ui.map(_.createGroup(s"${caseLabel}_nonrigid"))
+
+    val allMetrics = scala.collection.mutable.ListBuffer[RegMetrics]()
+    val regMeshMap = scala.collection.mutable.Map[String, TriangleMesh[_3D]]()
+
+    val mw = new PrintWriter(new File(logDir, s"metrics_${caseLabel}.csv"))
+    mw.println(csvHeader)
+
+    val caseRegDir = new File(regDir, caseLabel)
+    caseRegDir.mkdirs()
+
+    targets.zipWithIndex.foreach { case (spec, idx) =>
+      println(s"\n[$caseLabel  ${idx + 1}/${targets.length}] ${spec.modelId}")
+      println(s"  ── pre-processing ───────────────────────────────────────────")
+
+      // 0. Mirror right → left
+      val rawMesh = ScapulaData.loadMesh(spec.file)
+      val rawLms  = landmarks(spec.modelId)
+      val (oriented, orientedLms) =
+        if (spec.isRight) {
+          println(s"  [0] Mirror right → left")
+          (ScapulaData.mirrorMesh(rawMesh), ScapulaData.mirrorLandmarks(rawLms))
+        } else {
+          println(s"  [0] Left side – no mirror needed")
+          (rawMesh, rawLms)
+        }
+
+      // STEP 1. Landmark-based rigid registration (Procrustes on GC/TS/IA/PLA/AC)
+      println(s"  [1] Landmark rigid registration (Procrustes, ${refLms.length} landmarks)")
+      val lmTransform      = ScapulaData.rigidFromLandmarks(orientedLms, refLms)
+      val afterLm          = oriented.transform(lmTransform)
+      val afterLmLandmarks = orientedLms.map(lm => lm.copy(point = lmTransform(lm.point)))
+      val lmStats          = Metrics.symmetric(afterLm, reference)
+      println(f"     after LM Procrustes : ${lmStats.render}")
+
+      // STEP 2. Automatic trimmed ICP (rigid refinement)
+      println(s"  [2] Automatic trimmed ICP  (${Config.icpIterations} iters)")
+      val rigid     = RigidAlign.rigidIcp(afterLm, reference, Config.icpIterations)
+      val icpMotion = scalismo.registration.LandmarkRegistration.rigid3DLandmarkRegistration(
+        afterLm.pointSet.points.zip(rigid.pointSet.points).toIndexedSeq,
+        center = scalismo.geometry.Point3D(0, 0, 0)
+      )
+      val rigidLms   = afterLmLandmarks.map(lm => lm.copy(point = icpMotion(lm.point)))
+      val preStats   = Metrics.symmetric(rigid, reference)
+      val preLmDists = lmDistances(rigidLms, refLms)
+      println(f"     after ICP           : ${preStats.render}")
+      println(s"     landmark errors     : " +
+        ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+
+      ui.zip(grpUnreg).foreach { case (u, g) =>
+        u.show(g, rigid, s"${spec.modelId}_rigid")
+        rigidLms.foreach(lm => u.show(g, lm, s"${spec.modelId}_${lm.id}"))
+      }
+
+      // STEP 3. Multiscale GP non-rigid registration
+      println(s"  ── GP-ICP (4 passes) ────────────────────────────────────────")
+      val (regMesh, _) = registerOne(lrgp, reference, rigid, spec.modelId)
+      regMeshMap(spec.modelId) = regMesh
+
+      ui.zip(grpReg).foreach { case (u, g) =>
+        u.show(g, regMesh, s"${spec.modelId}_reg")
+      }
+
+      val postStats   = Metrics.symmetric(regMesh, rigid)
+      val postLmDists = lmErrorOnMesh(reference, regMesh, refLms, rigidLms)
+      val p2pDists    = Metrics.correspondingDistances(regMesh, reference)
+      val p2pMean     = p2pDists.sum / p2pDists.length
+      val p2pRms      = math.sqrt(p2pDists.map(x => x * x).sum / p2pDists.length)
+      val p2pCd       = p2pMean * 2.0
+
+      println(f"  ── results ──────────────────────────────────────────────────")
+      println(f"     PRE  rigid   vs ref  : ${preStats.render}")
+      println(f"     POST nonrig  vs rigid: ${postStats.render}")
+      println(f"     P2P  nonrig  vs ref  : mean=${p2pMean}%.2f mm  RMSE=${p2pRms}%.2f mm  CD=${p2pCd}%.2f mm")
+      println(s"     PRE  lm dists (mm)   : " +
+        ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+      println(s"     POST lm dists (mm)   : " +
+        ScapulaData.landmarkNames.map(n => f"$n=${postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+
+      val row = RegMetrics(
+        modelId     = spec.modelId,
+        preMean     = preStats.mean,    preRms  = preStats.rms,
+        preCd       = preStats.chamfer, preHd   = preStats.hd,
+        postMean    = postStats.mean,   postRms = postStats.rms,
+        postCd      = postStats.chamfer, postHd = postStats.hd,
+        p2pMean     = p2pMean, p2pRms = p2pRms, p2pCd = p2pCd,
+        preLmDists  = preLmDists,
+        postLmDists = postLmDists,
+        gpRank      = lrgp.rank
+      )
+      allMetrics += row
+      mw.println(row.csvRow)
+      mw.flush()
+
+      MeshIO.writeMesh(regMesh, new File(caseRegDir, s"${spec.modelId}_reg_${caseLabel}.stl"))
+        .recover { case ex => println(s"  WARN: STL write failed: ${ex.getMessage}") }
+    }
+
+    mw.close()
+
+    val rows = allMetrics.toSeq
+
+    // ── Per-case table ────────────────────────────────────────────────────
+    println()
+    println(s">>> TABLE: $caseLabel <<<")
+    printMetricsTable(rows)
+    printLmDistSummary(rows)
+
+    // ── Best / worst for this case ────────────────────────────────────────
+    if (rows.nonEmpty) {
+      val bestRow  = rows.minBy(_.postCd)
+      val worstRow = rows.maxBy(_.postCd)
+      println()
+      println("*" * 90)
+      println(s"  [$caseLabel]  BEST  (lowest post-CD): ${bestRow.modelId}")
+      println(f"  POST  mean=${bestRow.postMean}%.2f  RMSE=${bestRow.postRms}%.2f  CD=${bestRow.postCd}%.2f  HD=${bestRow.postHd}%.2f mm")
+      println(f"  P2P   mean=${bestRow.p2pMean}%.2f  RMSE=${bestRow.p2pRms}%.2f  CD=${bestRow.p2pCd}%.2f mm")
+      println(s"  POST lm: " + lmNames.map(n => f"$n=${bestRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+      println()
+      println(s"  [$caseLabel]  WORST (highest post-CD): ${worstRow.modelId}")
+      println(f"  POST  mean=${worstRow.postMean}%.2f  RMSE=${worstRow.postRms}%.2f  CD=${worstRow.postCd}%.2f  HD=${worstRow.postHd}%.2f mm")
+      println(f"  P2P   mean=${worstRow.p2pMean}%.2f  RMSE=${worstRow.p2pRms}%.2f  CD=${worstRow.p2pCd}%.2f mm")
+      println(s"  POST lm: " + lmNames.map(n => f"$n=${worstRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
+      println("*" * 90)
+
+      for {
+        u         <- ui
+        bestMesh  <- regMeshMap.get(bestRow.modelId)
+        worstMesh <- regMeshMap.get(worstRow.modelId)
+      } {
+        val gb = u.createGroup(s"${caseLabel}_BEST_${bestRow.modelId}")
+        val gw = u.createGroup(s"${caseLabel}_WORST_${worstRow.modelId}")
+        u.show(gb, reference, "reference"); u.show(gb, bestMesh,  s"${bestRow.modelId}_reg")
+        u.show(gw, reference, "reference"); u.show(gw, worstMesh, s"${worstRow.modelId}_reg")
+      }
+    }
+
+    rows
+  }
+
+  // ----------------------------------------------------------
   //  Main
   // ----------------------------------------------------------
   def main(args: Array[String]): Unit = {
@@ -354,7 +540,7 @@ object NonRigidRegistration {
     Seq(outDir, regDir, logDir).foreach(_.mkdirs())
 
     println("================================================================")
-    println(s" Multiscale GP Non-Rigid Registration")
+    println(s" Multiscale GP Non-Rigid Registration  —  2-case comparison")
     println(s" $timestamp")
     println("================================================================")
     println(s" Data   : ${dir.getAbsolutePath}")
@@ -368,263 +554,112 @@ object NonRigidRegistration {
 
     val allWithLandmarks = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
     val allSpecimens = selectedSpecimens match {
-      case None       => allWithLandmarks
-      case Some(ids)  =>
+      case None      => allWithLandmarks
+      case Some(ids) =>
         val filtered = allWithLandmarks.filter(s => ids.contains(s.modelId))
         val missing  = ids -- filtered.map(_.modelId).toSet
         if (missing.nonEmpty)
-          println(s"  WARN: selected specimens not found in data dir: ${missing.mkString(", ")}")
+          println(s"  WARN: selected specimens not found: ${missing.mkString(", ")}")
         filtered
     }
     require(allSpecimens.nonEmpty, s"No specimens with landmarks in ${dir.getAbsolutePath}")
-    println(s" Specimens selected: ${allSpecimens.length}  (of ${allWithLandmarks.length} total with landmarks)")
+    println(s" Specimens selected: ${allSpecimens.length}  (of ${allWithLandmarks.length} with landmarks)")
     allSpecimens.foreach(s => println(s"   ${if (s.isRight) "R" else "L"} ${s.modelId}"))
 
     // ── Reference ─────────────────────────────────────────────────────────
     val refSpec = fixedReferenceId match {
       case Some(id) =>
-        allSpecimens.find(_.modelId == id).getOrElse {
-          throw new RuntimeException(s"Fixed reference '$id' not found among selected specimens")
-        }
-      case None =>
-        allSpecimens.find(!_.isRight).getOrElse(allSpecimens.head)
+        allSpecimens.find(_.modelId == id).getOrElse(
+          throw new RuntimeException(s"Fixed reference '$id' not found")
+        )
+      case None => allSpecimens.find(!_.isRight).getOrElse(allSpecimens.head)
     }
-    val refRaw    = ScapulaData.loadMesh(refSpec.file)
-    val reference = refRaw.operations.decimate(Config.modelResolution)
+    val reference = ScapulaData.loadMesh(refSpec.file).operations.decimate(Config.modelResolution)
     val refLms    = landmarks(refSpec.modelId)
     println(s" Reference: ${refSpec.modelId}  (${reference.pointSet.numberOfPoints} vertices)")
 
-    // ── Build LRGP prior ──────────────────────────────────────────────────
-    println("\nBuilding multiscale GP prior …")
-    val lrgp = buildLRGP(reference, kernelSpecs, Config.gpRelativeTolerance)
-    println(s"  GP rank = ${lrgp.rank}")
+    val targets = allSpecimens.filterNot(_.modelId == refSpec.modelId)
+    println(s" Targets  : ${targets.length}  (${targets.map(_.modelId).mkString(", ")})")
 
-    printKernelTable(kernelSpecs, lrgp.rank, Config.gpRelativeTolerance)
-    printCascadeTable()
-
-    // Save kernel config
-    val kw = new PrintWriter(new File(logDir, "kernel_config.csv"))
-    kw.println("level,sigma_mm,scale,relativeTol,gp_rank")
-    kernelSpecs.foreach(s => kw.println(s"${s.tag},${s.sigma},${s.scale},${Config.gpRelativeTolerance},${lrgp.rank}"))
-    kw.close()
-
-    // ── Scalismo UI ───────────────────────────────────────────────────────
-    val ui       = if (Config.showUi) Some(ScalismoUI()) else None
-    val grpRef   = ui.map(_.createGroup("reference"))
-    val grpUnreg = ui.map(_.createGroup("unregistered_rigid"))
-    val grpReg   = ui.map(_.createGroup("registered_nonrigid"))
-
+    // ── Scalismo UI — shared reference group ──────────────────────────────
+    val ui     = if (Config.showUi) Some(ScalismoUI()) else None
+    val grpRef = ui.map(_.createGroup("reference"))
     ui.zip(grpRef).foreach { case (u, g) =>
       u.show(g, reference, "reference")
       refLms.foreach(lm => u.show(g, lm, lm.id))
     }
 
-    // ── Registration loop ─────────────────────────────────────────────────
-    val targets    = allSpecimens.filterNot(_.modelId == refSpec.modelId)
-    val allMetrics = scala.collection.mutable.ListBuffer[RegMetrics]()
-    // Keep registered meshes so we can highlight best/worst in the UI after the loop
-    val regMeshMap = scala.collection.mutable.Map[String, TriangleMesh[_3D]]()
+    // ── Case A: 3-kernel (Coarse + Mid + Fine) ────────────────────────────
+    val rowsA = runCase("3kernel", kernels3, reference, refLms, targets, landmarks, regDir, logDir, ui)
 
-    val mw = new PrintWriter(new File(logDir, "registration_metrics.csv"))
-    mw.println(csvHeader)
+    // ── Case B: 2-kernel (Coarse + Fine only) ─────────────────────────────
+    val rowsB = runCase("2kernel", kernels2, reference, refLms, targets, landmarks, regDir, logDir, ui)
 
-    targets.zipWithIndex.foreach { case (spec, idx) =>
-      println(s"\n[${idx + 1}/${targets.length}] ${spec.modelId}")
-      println(s"  ── pre-processing ──────────────────────────────────────────")
-
-      // ── 0. Mirror right → left space ────────────────────────────────────
-      val rawMesh = ScapulaData.loadMesh(spec.file)
-      val rawLms  = landmarks(spec.modelId)
-      val (oriented, orientedLms) =
-        if (spec.isRight) {
-          println(s"  [0] Mirror right → left")
-          (ScapulaData.mirrorMesh(rawMesh), ScapulaData.mirrorLandmarks(rawLms))
-        } else {
-          println(s"  [0] Left side – no mirror needed")
-          (rawMesh, rawLms)
-        }
-
-      // ── STEP 1. Landmark-based rigid registration (Procrustes) ──────────
-      // Finds the best rigid transform that maps the 5 annotated landmarks
-      // (GC, TS, IA, PLA, AC) on the moving mesh onto the same landmarks on
-      // the reference.  This gives a coarse but anatomically grounded pose.
-      println(s"  [1] Landmark rigid registration (Procrustes, ${refLms.length} landmarks)")
-      val lmTransform  = ScapulaData.rigidFromLandmarks(orientedLms, refLms)
-      val afterLm      = oriented.transform(lmTransform)
-      val afterLmLandmarks = orientedLms.map(lm => lm.copy(point = lmTransform(lm.point)))
-      val lmStats      = Metrics.symmetric(afterLm, reference)
-      println(f"     after LM Procrustes : ${lmStats.render}")
-
-      // ── STEP 2. Automatic trimmed ICP (rigid refinement) ─────────────────
-      // Runs from the landmark-initialised pose.  Uses a spatially uniform
-      // point sample so thin structures (acromion, coracoid) are not
-      // systematically missed. Trims the worst 15 % of correspondences so
-      // partially non-overlapping regions do not corrupt the rotation.
-      println(s"  [2] Automatic trimmed ICP  (${Config.icpIterations} iters)")
-      val rigid     = RigidAlign.rigidIcp(afterLm, reference, Config.icpIterations)
-      // Carry the landmarks along with the ICP motion
-      val icpMotion = scalismo.registration.LandmarkRegistration.rigid3DLandmarkRegistration(
-        afterLm.pointSet.points.zip(rigid.pointSet.points).toIndexedSeq,
-        center = scalismo.geometry.Point3D(0, 0, 0)
-      )
-      val rigidLms  = afterLmLandmarks.map(lm => lm.copy(point = icpMotion(lm.point)))
-      val preStats  = Metrics.symmetric(rigid, reference)
-      println(f"     after ICP           : ${preStats.render}")
-      val preLmDists = lmDistances(rigidLms, refLms)
-      println(s"     landmark errors     : " +
-        ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-
-      // Show rigid surface + carried landmarks in UI
-      ui.zip(grpUnreg).foreach { case (u, g) =>
-        u.show(g, rigid, s"${spec.modelId}_rigid")
-        rigidLms.foreach(lm => u.show(g, lm, s"${spec.modelId}_${lm.id}"))
-      }
-
-      // ── STEP 3. Multiscale GP non-rigid registration ──────────────────────
-      // Uses the GP prior (3-term Madsen kernel) as the transformation space.
-      // Runs 4 passes with decreasing regularisation weight so the deformation
-      // moves from coarse global shape to fine local detail.
-      println(s"  ── non-rigid (GP-ICP, 4 passes) ────────────────────────────")
-      val (regMesh, _) = registerOne(lrgp, reference, rigid, spec.modelId)
-      regMeshMap(spec.modelId) = regMesh
-
-      // Show registered surface in UI
-      ui.zip(grpReg).foreach { case (u, g) =>
-        u.show(g, regMesh, s"${spec.modelId}_reg")
-      }
-
-      // Post-registration surface metrics (registered mesh vs the rigid target)
-      val postStats   = Metrics.symmetric(regMesh, rigid)
-      val postLmDists = lmErrorOnMesh(reference, regMesh, refLms, rigidLms)
-
-      // Point-to-point metrics (regMesh shares reference topology — deformation magnitude)
-      val p2pDists = Metrics.correspondingDistances(regMesh, reference)
-      val p2pMean  = p2pDists.sum / p2pDists.length
-      val p2pRms   = math.sqrt(p2pDists.map(x => x * x).sum / p2pDists.length)
-      val p2pCd    = p2pMean * 2.0
-
-      println(f"  ── results ─────────────────────────────────────────────────")
-      println(f"     PRE  rigid   vs ref  : ${preStats.render}")
-      println(f"     POST nonrig  vs rigid: ${postStats.render}")
-      println(f"     P2P  nonrig  vs ref  : mean=${p2pMean}%.2f mm  RMSE=${p2pRms}%.2f mm  CD=${p2pCd}%.2f mm")
-      println(s"     PRE  lm dists (mm)   : " +
-        ScapulaData.landmarkNames.map(n => f"$n=${preLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-      println(s"     POST lm dists (mm)   : " +
-        ScapulaData.landmarkNames.map(n => f"$n=${postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-
-      val row = RegMetrics(
-        modelId     = spec.modelId,
-        preMean     = preStats.mean,   preRms  = preStats.rms,
-        preCd       = preStats.chamfer, preHd  = preStats.hd,
-        postMean    = postStats.mean,  postRms = postStats.rms,
-        postCd      = postStats.chamfer, postHd = postStats.hd,
-        p2pMean     = p2pMean, p2pRms = p2pRms, p2pCd = p2pCd,
-        preLmDists  = preLmDists,
-        postLmDists = postLmDists,
-        gpRank      = lrgp.rank
-      )
-      allMetrics += row
-      mw.println(row.csvRow)
-      mw.flush()
-
-      val outFile = new File(regDir, s"${spec.modelId}_registered.stl")
-      MeshIO.writeMesh(regMesh, outFile)
-        .recover { case ex => println(s"  WARN: could not write ${outFile.getName}: ${ex.getMessage}") }
+    // ── Side-by-side comparison table ─────────────────────────────────────
+    println()
+    println("=" * 90)
+    println("  COMPARISON SUMMARY  (post-nonrigid metrics, mean across 5 targets)")
+    println("=" * 90)
+    println(f"${"Case"}%-12s  ${"mean (mm)"}%10s  ${"RMSE (mm)"}%10s  ${"CD (mm)"}%9s  ${"HD (mm)"}%9s  ${"p2p-RMSE"}%10s")
+    println("-" * 90)
+    def summaryRow(label: String, rows: Seq[RegMetrics]): Unit = {
+      if (rows.isEmpty) return
+      def avg(f: RegMetrics => Double) = rows.map(f).sum / rows.length
+      println(f"$label%-12s  ${avg(_.postMean)}%10.2f  ${avg(_.postRms)}%10.2f  ${avg(_.postCd)}%9.2f  ${avg(_.postHd)}%9.2f  ${avg(_.p2pRms)}%10.2f")
     }
-
-    mw.close()
-
-    // ── Final tables ──────────────────────────────────────────────────────
-    val rows = allMetrics.toSeq
-    printMetricsTable(rows)
-    printLmDistSummary(rows)
-
-    // ── Best / worst highlight ────────────────────────────────────────────
-    if (rows.nonEmpty) {
-      val bestRow  = rows.minBy(_.postCd)
-      val worstRow = rows.maxBy(_.postCd)
-
-      println()
-      println("*" * 90)
-      println("  BEST REGISTRATION  (lowest post-CD — most accurate shape fit)")
-      println("*" * 90)
-      println(f"  Specimen : ${bestRow.modelId}")
-      println(f"  POST  mean=${bestRow.postMean}%.2f mm  RMSE=${bestRow.postRms}%.2f mm  CD=${bestRow.postCd}%.2f mm  HD=${bestRow.postHd}%.2f mm")
-      println(f"  P2P   mean=${bestRow.p2pMean}%.2f mm  RMSE=${bestRow.p2pRms}%.2f mm  CD=${bestRow.p2pCd}%.2f mm")
-      println(s"  POST lm: " +
-        lmNames.map(n => f"$n=${bestRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-      println()
-      println("*" * 90)
-      println("  WORST REGISTRATION  (highest post-CD — hardest shape to fit)")
-      println("*" * 90)
-      println(f"  Specimen : ${worstRow.modelId}")
-      println(f"  POST  mean=${worstRow.postMean}%.2f mm  RMSE=${worstRow.postRms}%.2f mm  CD=${worstRow.postCd}%.2f mm  HD=${worstRow.postHd}%.2f mm")
-      println(f"  P2P   mean=${worstRow.p2pMean}%.2f mm  RMSE=${worstRow.p2pRms}%.2f mm  CD=${worstRow.p2pCd}%.2f mm")
-      println(s"  POST lm: " +
-        lmNames.map(n => f"$n=${worstRow.postLmDists.getOrElse(n, Double.NaN)}%.2f").mkString("  "))
-
-      // Show best and worst in dedicated UI groups for visual comparison
-      for {
-        u           <- ui
-        bestMesh    <- regMeshMap.get(bestRow.modelId)
-        worstMesh   <- regMeshMap.get(worstRow.modelId)
-      } {
-        val grpBest  = u.createGroup(s"BEST_${bestRow.modelId}")
-        val grpWorst = u.createGroup(s"WORST_${worstRow.modelId}")
-        u.show(grpBest,  reference, "reference")
-        u.show(grpBest,  bestMesh,  s"${bestRow.modelId}_reg")
-        u.show(grpWorst, reference, "reference")
-        u.show(grpWorst, worstMesh, s"${worstRow.modelId}_reg")
-      }
-    }
+    summaryRow("3kernel", rowsA)
+    summaryRow("2kernel", rowsB)
+    println("=" * 90)
 
     // ── Summary file ──────────────────────────────────────────────────────
     val rw = new PrintWriter(new File(logDir, "summary.txt"))
     rw.println(s"Run       : $runTag")
     rw.println(s"Data      : ${dir.getAbsolutePath}")
     rw.println(s"Reference : ${refSpec.modelId}  (${reference.pointSet.numberOfPoints} vertices)")
-    rw.println(s"Registered: ${rows.length} specimens")
-    rw.println(s"Landmarks : ${lmNames.mkString(", ")}")
-    rw.println()
-    rw.println("KERNEL CONFIGURATION")
-    kernelSpecs.foreach(s => rw.println(f"  ${s.tag}%-10s  sigma=${s.sigma}%.1f mm  scale=${s.scale}%.1f"))
-    rw.println(s"  GP rank: ${lrgp.rank}  (relativeTol=${Config.gpRelativeTolerance})")
+    rw.println(s"Targets   : ${targets.map(_.modelId).mkString(", ")}")
+    rw.println(s"Pipeline  : LM Procrustes → trimmed ICP → multiscale GP-ICP (4 passes)")
     rw.println()
     rw.println("REGISTRATION CASCADE")
     regPasses.foreach(p => rw.println(s"  ${p.label}: regWeight=${p.regWeight}  iters=${p.iters}  nPoints=${p.nPoints}"))
-    if (rows.nonEmpty) {
+    def writeCaseSummary(label: String, specs: Seq[KernelSpec], rows: Seq[RegMetrics]): Unit = {
       rw.println()
-      def avg(f: RegMetrics => Double) = rows.map(f).sum / rows.length
-      rw.println(f"MEAN PRE-RIGID    mean=${avg(_.preMean)}%.2f  RMS=${avg(_.preRms)}%.2f  CD=${avg(_.preCd)}%.2f  HD=${avg(_.preHd)}%.2f mm")
-      rw.println(f"MEAN POST-NONRIG  mean=${avg(_.postMean)}%.2f  RMS=${avg(_.postRms)}%.2f  CD=${avg(_.postCd)}%.2f  HD=${avg(_.postHd)}%.2f mm")
-      rw.println(f"MEAN P2P (vs ref) mean=${avg(_.p2pMean)}%.2f  RMS=${avg(_.p2pRms)}%.2f  CD=${avg(_.p2pCd)}%.2f mm")
-      rw.println()
-      val bestRow  = rows.minBy(_.postCd)
-      val worstRow = rows.maxBy(_.postCd)
-      rw.println(f"BEST  registration: ${bestRow.modelId}  post-CD=${bestRow.postCd}%.2f  post-HD=${bestRow.postHd}%.2f  p2p-mean=${bestRow.p2pMean}%.2f mm")
-      rw.println(f"WORST registration: ${worstRow.modelId}  post-CD=${worstRow.postCd}%.2f  post-HD=${worstRow.postHd}%.2f  p2p-mean=${worstRow.p2pMean}%.2f mm")
-      rw.println()
-      rw.println("MEAN LANDMARK DISTANCES")
-      lmNames.foreach { n =>
-        val pre  = rows.flatMap(_.preLmDists.get(n))
-        val post = rows.flatMap(_.postLmDists.get(n))
-        if (pre.nonEmpty && post.nonEmpty)
-          rw.println(f"  $n%-6s  pre=${pre.sum / pre.length}%.2f mm  post=${post.sum / post.length}%.2f mm")
+      rw.println(s"=== $label ===")
+      specs.foreach(s => rw.println(f"  ${s.tag}%-10s  sigma=${s.sigma}%.1f mm  scale=${s.scale}%.1f"))
+      if (rows.nonEmpty) {
+        def avg(f: RegMetrics => Double) = rows.map(f).sum / rows.length
+        rw.println(f"  MEAN PRE    mean=${avg(_.preMean)}%.2f  RMSE=${avg(_.preRms)}%.2f  CD=${avg(_.preCd)}%.2f  HD=${avg(_.preHd)}%.2f mm")
+        rw.println(f"  MEAN POST   mean=${avg(_.postMean)}%.2f  RMSE=${avg(_.postRms)}%.2f  CD=${avg(_.postCd)}%.2f  HD=${avg(_.postHd)}%.2f mm")
+        rw.println(f"  MEAN P2P    mean=${avg(_.p2pMean)}%.2f  RMSE=${avg(_.p2pRms)}%.2f  CD=${avg(_.p2pCd)}%.2f mm")
+        val best  = rows.minBy(_.postCd)
+        val worst = rows.maxBy(_.postCd)
+        rw.println(f"  BEST  ${best.modelId}  post-CD=${best.postCd}%.2f  HD=${best.postHd}%.2f  p2p-RMSE=${best.p2pRms}%.2f mm")
+        rw.println(f"  WORST ${worst.modelId}  post-CD=${worst.postCd}%.2f  HD=${worst.postHd}%.2f  p2p-RMSE=${worst.p2pRms}%.2f mm")
       }
     }
+    writeCaseSummary("3kernel (Coarse+Mid+Fine)", kernels3, rowsA)
+    writeCaseSummary("2kernel (Coarse+Fine)",     kernels2, rowsB)
     rw.close()
 
     println(s"\nOutputs: ${outDir.getAbsolutePath}")
-    println(s"  registered_meshes/             – ${rows.length} STL files")
-    println(s"  logs/registration_metrics.csv  – surface + landmark distances")
-    println(s"  logs/kernel_config.csv")
+    println(s"  registered_meshes/3kernel/  – 5 STL files (Case A)")
+    println(s"  registered_meshes/2kernel/  – 5 STL files (Case B)")
+    println(s"  logs/metrics_3kernel.csv    – Case A metrics")
+    println(s"  logs/metrics_2kernel.csv    – Case B metrics")
+    println(s"  logs/kernel_config_3kernel.csv")
+    println(s"  logs/kernel_config_2kernel.csv")
     println(s"  logs/summary.txt")
 
     if (Config.showUi) {
       println("\nScalismo UI groups")
-      println("  reference             – reference scapula + landmark spheres")
-      println("  unregistered_rigid    – rigid-aligned targets + their landmarks")
-      println("  registered_nonrigid   – GP-registered surfaces")
+      println("  reference                   – reference + landmark spheres")
+      println("  3kernel_rigid               – rigid-aligned targets (Case A)")
+      println("  3kernel_nonrigid            – GP-registered (Case A)")
+      println("  3kernel_BEST_<id>           – best case A vs reference")
+      println("  3kernel_WORST_<id>          – worst case A vs reference")
+      println("  2kernel_rigid               – rigid-aligned targets (Case B)")
+      println("  2kernel_nonrigid            – GP-registered (Case B)")
+      println("  2kernel_BEST_<id>           – best case B vs reference")
+      println("  2kernel_WORST_<id>          – worst case B vs reference")
       println("\nClose the window to exit.")
     }
   }
