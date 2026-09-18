@@ -46,18 +46,18 @@ object NonRigidRegistration {
   // ----------------------------------------------------------
   //  Dataset selection
   //  The six specimens used in the validation run (Table 1).
-  //  005_F_67_R is the fixed reference; the other five are targets.
+  //  paired_scapula_005_F_67_R is the fixed reference; the other five are targets.
   //  Set to None to process every specimen in the data directory.
   // ----------------------------------------------------------
   val selectedSpecimens: Option[Set[String]] = Some(Set(
-    "001_M_64_L",
-    "002_M_56_L",
-    "005_F_67_R",
-    "006_F_60_R",
-    "007_M_26_L",
-    "008_F_73_L"
+    "paired_scapula_001_M_64_L",
+    "paired_scapula_002_M_56_L",
+    "paired_scapula_005_F_67_R",
+    "paired_scapula_006_F_60_R",
+    "paired_scapula_007_M_26_L",
+    "paired_scapula_008_F_73_L"
   ))
-  val fixedReferenceId: Option[String] = Some("005_F_67_R")
+  val fixedReferenceId: Option[String] = Some("paired_scapula_005_F_67_R")
 
   // ----------------------------------------------------------
   //  Kernel configuration
