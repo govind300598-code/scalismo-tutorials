@@ -47,6 +47,9 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  /** Limit registration to this many specimens (0 = no limit).  Used for quick smoke tests. */
+  val maxSpecimens: Int = env("SCAPULA_MAX_SPECIMENS", "0").toInt
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

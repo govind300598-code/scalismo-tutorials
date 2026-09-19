@@ -63,9 +63,9 @@ object Stage2NonRigidReg {
       numberOfSampledPoints: Int
   )
 
-  /** Coarse-to-fine schedule. */
+  /** Coarse-to-fine schedule (matches Tutorial 12 / Lüthi GPMM paper). */
   val regSchedule: IndexedSeq[RegistrationParameters] = IndexedSeq(
-    RegistrationParameters(1e-1, 20,  500),
+    RegistrationParameters(1e-1, 20, 1000),
     RegistrationParameters(1e-2, 30, 1000),
     RegistrationParameters(1e-4, 40, 2000),
     RegistrationParameters(1e-6, 50, 4000)
@@ -254,7 +254,9 @@ object Stage2NonRigidReg {
     val specimens = ScapulaData.specimens(dir)
     val reference = chooseReference(specimens, landmarks)
     println(s"Reference: ${reference.modelId}")
-    val refMesh = ScapulaData.loadMesh(reference.file)
+    val refMeshRaw = ScapulaData.loadMesh(reference.file)
+    val refMesh = refMeshRaw.operations.decimate(Config.modelResolution)
+    println(s"Reference decimated: ${refMeshRaw.pointSet.numberOfPoints} → ${refMesh.pointSet.numberOfPoints} vertices")
     val refLms  = landmarks(reference.modelId)
 
     val gpOutDir = new File(outDir, gpParams.label)
@@ -271,9 +273,13 @@ object Stage2NonRigidReg {
       rv.color = java.awt.Color.RED
     }
 
-    val toRegister = specimens.filter(s =>
+    val allToRegister = specimens.filter(s =>
       s.modelId != reference.modelId && landmarks.contains(s.modelId)
     )
+    val toRegister =
+      if (Config.maxSpecimens > 0) allToRegister.take(Config.maxSpecimens) else allToRegister
+    if (Config.maxSpecimens > 0)
+      println(s"SCAPULA_MAX_SPECIMENS=${Config.maxSpecimens}: registering ${toRegister.length} of ${allToRegister.length} specimens")
 
     toRegister.zipWithIndex.foreach { case (spec, idx) =>
       println(s"\n[${idx + 1}/${toRegister.length}] ${spec.modelId}")
