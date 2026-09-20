@@ -75,6 +75,10 @@ object NonRigidFittingExample {
     }
 
   def main(args: Array[String]): Unit = {
+    // Required before touching any VTK-backed class (MeshIO's STL reader, ScalismoUI, ...): it extracts and
+    // loads the native VTK libraries. Without it, VTK objects fail to initialize with an UnsatisfiedLinkError
+    // on VTKInit because the native libraries were never loaded in the first place.
+    scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
 
     println("Doing stuff")
