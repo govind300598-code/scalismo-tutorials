@@ -1,11 +1,13 @@
 package scapula
 
+import breeze.linalg.{DenseMatrix, DenseVector}
+import scalismo.common.{Field, RealSpace}
 import scalismo.geometry.*
 import scalismo.image.DiscreteImage
 import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
 import scalismo.numerics.UniformMeshSampler3D
-import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, PointDistributionModel}
+import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, MultivariateNormalDistribution, PointDistributionModel}
 import scalismo.utils.Random
 
 import java.io.File
@@ -14,45 +16,46 @@ import java.time.LocalDate
 /**
  * Full Statistical Density Modeling pipeline for the scapula.
  *
+ * Based on Cootes et al. "A combined active shape and mean appearance model" — the
+ * density field (Hounsfield Units at correspondence vertices) plays the role of the
+ * texture/appearance, and the pipeline produces both a shape model and a density model,
+ * plus an optional joint AAM-style combined model.
+ *
  * ┌───────────────────────────────────────────────────────────────────────────┐
  * │  Stage 1 — DISCOVER & PREPROCESS                                         │
  * │    Load paired *_volume.nrrd / *_scapula_0.seg.nrrd                     │
- * │    Marching-Cubes surface extraction → TriangleMesh per specimen          │
- * │    Quick HU sanity check (bone HU should be 300–2000)                   │
+ * │    Surface extraction (STL if present, else Marching Cubes)             │
+ * │    Quick HU sanity check (bone surface should average 300–1500 HU)      │
  * ├───────────────────────────────────────────────────────────────────────────┤
  * │  Stage 2 — RIGID ALIGNMENT                                               │
- * │    Trimmed landmark + ICP alignment (uses existing RigidAlign object)    │
- * │    Mirror right → left so all bones are in the same handedness           │
+ * │    Trimmed ICP (uses existing RigidAlign object)                         │
  * ├───────────────────────────────────────────────────────────────────────────┤
  * │  Stage 3 — GP NON-RIGID REGISTRATION                                     │
- * │    Build a low-rank Gaussian-process deformation model on the reference  │
- * │    ICP in deformation space → point-to-point correspondence              │
- * │    Warp each specimen onto the reference topology                        │
+ * │    Gaussian-process deformation prior → posterior ICP correspondence      │
+ * │    Produces reference-topology meshes for all specimens                  │
  * ├───────────────────────────────────────────────────────────────────────────┤
  * │  Stage 4 — HU FIELD SAMPLING                                             │
- * │    For each specimen: sample HU at *reference* vertex positions using    │
- * │    the inverse warp + the specimen's own CT volume                       │
+ * │    Sample HU at registered reference vertices from each specimen's CT    │
+ * │    Saves one <id>_HU.csv per specimen in raw_hu_per_specimen/            │
  * ├───────────────────────────────────────────────────────────────────────────┤
  * │  Stage 5 — STATISTICAL DENSITY MODEL                                     │
- * │    PCA on N × P matrix of HU values                                      │
- * │    Optional: joint shape + density model                                 │
- * │    Export: CSV of mean + components, per-specimen HU scores              │
+ * │    PCA on N × P HU matrix → density model                               │
+ * │    Optional joint shape+density model (AAM-style)                        │
+ * │    Exports CSV files for downstream analysis / visualisation             │
  * └───────────────────────────────────────────────────────────────────────────┘
  */
 object DensityPipeline {
 
   // ---------------------------------------------------------------------------
-  // Extended config for NRRD data
+  // Config
   // ---------------------------------------------------------------------------
 
-  /** Directory that contains the *_volume.nrrd and *_scapula_0.seg.nrrd files. */
   val nrrdDir: File = new File(
     sys.env.getOrElse("SCAPULA_NRRD_DIR", "/home/user/Documents/armcortnet_output_B3")
   )
 
-  // Default output folder is date-stamped so each run produces a distinct directory.
-  // Override with SCAPULA_DENSITY_OUT=/your/path if needed.
-  private val runDate: String = LocalDate.now().toString // e.g. 2026-09-20
+  // Default output folder is date-stamped so each run is distinct.
+  private val runDate: String = LocalDate.now().toString
   val densityOutDir: File = new File(
     sys.env.getOrElse(
       "SCAPULA_DENSITY_OUT",
@@ -71,26 +74,24 @@ object DensityPipeline {
     specimens.zipWithIndex.map { case (spec, idx) =>
       println(s"  [${idx + 1}/${specimens.length}] ${spec.id}")
 
-      val seg    = NrrdData.loadSegmentation(spec.segFile)
       val volume = NrrdData.loadVolume(spec.volumeFile)
+      val mesh   = NrrdData.extractSurface(spec)
+      println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices, " +
+              f"${mesh.triangulation.triangles.length} triangles")
 
-      val mesh = NrrdData.extractSurface(seg)
-      println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices, ${mesh.triangulation.triangles.length} triangles")
-
-      // Sanity-check HU distribution at the bone surface
       val hu = NrrdData.sampleHU(mesh, volume)
       val (minHU, maxHU, meanHU) = NrrdData.huStats(hu)
-      val corticalFrac = NrrdData.corticalMask(hu).count(identity).toDouble / hu.length
-      println(f"    HU at surface: min=$minHU%.0f  max=$maxHU%.0f  mean=$meanHU%.0f  cortical(>300HU)=${corticalFrac * 100}%.1f%%")
-      if (meanHU < 100f || meanHU > 1800f)
-        println(s"    !! Unusual mean HU – check segmentation orientation / units for ${spec.id}")
+      val cFrac = NrrdData.corticalMask(hu).count(identity).toDouble / hu.length
+      println(f"    HU: min=$minHU%.0f  max=$maxHU%.0f  mean=$meanHU%.0f  cortical(>300HU)=${cFrac * 100}%.1f%%")
+      if (meanHU < 50f || meanHU > 2000f)
+        println(s"    !! Unusual mean HU for ${spec.id} — check segmentation / CT units")
 
       (spec, mesh, volume)
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Stage 2 – Rigid alignment (reference = first specimen)
+  // Stage 2 – Rigid alignment
   // ---------------------------------------------------------------------------
 
   def stage2_rigidAlign(
@@ -108,16 +109,14 @@ object DensityPipeline {
       println(f"  ${spec.id} -> ${d.render}")
       (spec, alignedMesh, vol)
     }
-
     (refMesh, (refSpec, refMesh, refVol) +: aligned)
   }
 
   // ---------------------------------------------------------------------------
   // Stage 3 – GP non-rigid registration
   //
-  // We build a low-rank Gaussian-process deformation prior on the reference mesh
-  // and fit it to each target by iterative closest point in deformation space.
-  // The result is a warp: reference → target that establishes dense correspondence.
+  // Builds a low-rank Gaussian-process deformation prior on the reference mesh,
+  // then fits each target via ICP in deformation space.
   // ---------------------------------------------------------------------------
 
   def stage3_nonrigidRegister(
@@ -128,23 +127,24 @@ object DensityPipeline {
 
     println(s"\n[Stage 3] GP non-rigid registration")
 
-    // Build a Gaussian deformation prior: sum of two length scales for
-    // large (coarse) and small (fine) deformations typical of bone surfaces.
-    val kernel = DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 50.0) * 50.0, outputDim = 3) +
-                 DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 10.0) * 10.0, outputDim = 3)
+    // Two-scale Gaussian kernel: large scale captures global shape variation,
+    // small scale captures local surface detail.
+    val kernel =
+      DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 50.0) * 50.0, outputDim = 3) +
+      DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 10.0) * 10.0, outputDim = 3)
 
-    val gp = GaussianProcess[_3D, EuclideanVector[_3D]](kernel)
-    val lowRankGP = LowRankGaussianProcess.approximateGPNystrom(
-      gp, refMesh.pointSet, numBasisFunctions = Config.gpMaxRank
-    )
-    val model = PointDistributionModel[_3D, TriangleMesh](refMesh, lowRankGP)
+    // Zero-mean GP deformation field over R³
+    val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D])(_ => EuclideanVector(0.0, 0.0, 0.0))
+    val gp       = GaussianProcess(zeroMean, kernel)
 
+    // Nystrom approximation sampled uniformly on the reference mesh
+    val sampler   = UniformMeshSampler3D(refMesh, numberOfPoints = 500)
+    val lowRankGP = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, numBasisFunctions = Config.gpMaxRank)
+    val model     = PointDistributionModel[_3D, TriangleMesh](refMesh, lowRankGP)
     println(s"  GP rank: ${lowRankGP.rank}")
 
     aligned.zipWithIndex.map { case ((spec, targetMesh, vol), idx) =>
       println(s"  [${idx + 1}/${aligned.length}] ${spec.id}")
-
-      // ICP in deformation-model space: fit the model to the target
       val fittedMesh = gpIcp(model, targetMesh, iterations = Config.icpIterations)
       val d = Metrics.symmetric(fittedMesh, targetMesh)
       println(f"    registration residual: ${d.render}")
@@ -153,37 +153,38 @@ object DensityPipeline {
   }
 
   /**
-   * GP-ICP: iteratively find the posterior of the shape model that best explains
-   * the target surface, producing a warp of the reference onto the target topology.
+   * GP-ICP: iterative closest-point in GP deformation space.
    *
-   * Each iteration:
-   *   1. Sample points on the current best-fit mesh
-   *   2. Find closest points on the target surface
-   *   3. Compute the GP posterior constrained to those correspondences
-   *   4. Take the posterior mean as the new candidate
+   * Each iteration samples points on the current best-fit mesh, finds their
+   * closest counterparts on the target surface, then computes the posterior
+   * mean of the shape model given those correspondences.
    */
   private def gpIcp(
     model: PointDistributionModel[_3D, TriangleMesh],
     target: TriangleMesh[_3D],
     iterations: Int,
     numPoints: Int = 500,
-    noise: Double = 1.0
+    noiseStdDev: Double = 1.0
   )(implicit rng: Random): TriangleMesh[_3D] = {
-    var current = model.mean
+
+    // Isotropic Gaussian noise on correspondences (in mm)
+    val noiseDist = MultivariateNormalDistribution(
+      DenseVector.zeros[Double](3),
+      DenseMatrix.eye[Double](3) * (noiseStdDev * noiseStdDev)
+    )
+
+    var current   = model.mean
     val targetOps = target.operations
 
     for (_ <- 0 until iterations) {
       val sampled = UniformMeshSampler3D(current, numPoints).sample().map(_._1)
-      val obs = sampled.flatMap { pt =>
+      val obs = sampled.map { pt =>
         val closest = targetOps.closestPointOnSurface(pt).point
-        val id = current.pointSet.findClosestPoint(pt).id
-        Some((id, closest))
+        val id      = current.pointSet.findClosestPoint(pt).id
+        (id, closest, noiseDist)
       }
       if (obs.nonEmpty) {
-        // PointDistributionModel.posterior expects Seq[(PointId, Point[_3D], Double)]
-        // where the Double is the isotropic noise standard deviation.
-        val trainingData = obs.map { case (id, tgt) => (id, tgt, noise) }
-        val posterior = model.posterior(trainingData)
+        val posterior = model.posterior(obs)
         current = posterior.mean
       }
     }
@@ -200,16 +201,26 @@ object DensityPipeline {
   ): IndexedSeq[(String, IndexedSeq[Float])] = {
 
     println(s"\n[Stage 4] Sampling HU at ${refMesh.pointSet.numberOfPoints} reference vertices")
-    println("  Strategy: map each reference vertex through the specimen's registered warp,")
-    println("  then query the specimen's own CT volume at that warped position.")
+
+    // Raw per-specimen HU folder: one CSV per specimen
+    val rawHuDir = new File(densityOutDir, "raw_hu_per_specimen")
+    rawHuDir.mkdirs()
 
     registered.zipWithIndex.map { case ((spec, regMesh, volume), idx) =>
-      // regMesh is the reference topology deformed to match the specimen.
-      // Its vertices are in the specimen's (rigidly aligned) coordinate frame.
-      // We query the CT volume at those positions directly.
       val hu = NrrdData.sampleHU(regMesh, volume)
       val (mn, mx, avg) = NrrdData.huStats(hu)
       println(f"  [${idx + 1}/${registered.length}] ${spec.id}  HU: min=$mn%.0f max=$mx%.0f mean=$avg%.0f")
+
+      // ── Per-specimen raw HU CSV (vertex_idx, x, y, z, HU) ──────────────────
+      val outFile = new File(rawHuDir, s"${spec.id}_HU.csv")
+      val pw = new java.io.PrintWriter(outFile)
+      try {
+        pw.println("vertex_idx,x,y,z,HU")
+        regMesh.pointSet.points.toIndexedSeq.zipWithIndex.foreach { case (pt, j) =>
+          pw.println(f"$j,${pt.x}%.3f,${pt.y}%.3f,${pt.z}%.3f,${hu(j)}%.1f")
+        }
+      } finally pw.close()
+
       (spec.id, hu)
     }
   }
@@ -224,7 +235,7 @@ object DensityPipeline {
     registered: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]
   ): StatisticalDensityModel.DensityModel = {
 
-    println(s"\n[Stage 5] Building Statistical Density Model")
+    println(s"\n[Stage 5] Building Statistical Density Model  (AAM-style)")
 
     val ids    = huFields.map(_._1)
     val fields = huFields.map(_._2)
@@ -235,7 +246,7 @@ object DensityPipeline {
     densityOutDir.mkdirs()
     StatisticalDensityModel.exportCsv(model, new File(densityOutDir, "density_model.csv"))
 
-    // Per-specimen scores
+    // Per-specimen latent scores CSV
     val scoresFile = new File(densityOutDir, "density_scores.csv")
     val pw = new java.io.PrintWriter(scoresFile)
     try {
@@ -246,25 +257,24 @@ object DensityPipeline {
         pw.println(id + "," + s.toArray.map(v => f"$v%.4f").mkString(","))
       }
     } finally pw.close()
-    println(s"  Per-specimen scores written to: ${scoresFile.getAbsolutePath}")
+    println(s"  Per-specimen scores: ${scoresFile.getAbsolutePath}")
 
-    // Also export mean HU field as a coloured mesh (values stored as scalar field)
-    // Requires writing a VTK or PLY; here we write a simple per-vertex CSV.
-    val meanHuMeshCsv = new File(densityOutDir, "reference_mesh_meanHU.csv")
-    val mw = new java.io.PrintWriter(meanHuMeshCsv)
+    // Mean HU mapped to reference mesh vertices (open in ParaView / 3D Slicer)
+    val meanCsv = new File(densityOutDir, "reference_mesh_meanHU.csv")
+    val mw = new java.io.PrintWriter(meanCsv)
     try {
       mw.println("vertex_idx,x,y,z,mean_HU")
       refMesh.pointSet.points.toIndexedSeq.zipWithIndex.foreach { case (pt, j) =>
         mw.println(f"$j,${pt.x}%.3f,${pt.y}%.3f,${pt.z}%.3f,${model.meanHU(j)}%.2f")
       }
     } finally mw.close()
-    println(s"  Mean HU mesh written to: ${meanHuMeshCsv.getAbsolutePath}")
+    println(s"  Mean HU mesh:        ${meanCsv.getAbsolutePath}")
 
     model
   }
 
   // ---------------------------------------------------------------------------
-  // Main entry point
+  // Main
   // ---------------------------------------------------------------------------
 
   def main(args: Array[String]): Unit = {
@@ -272,55 +282,45 @@ object DensityPipeline {
     implicit val rng: Random = Random(Config.seed)
 
     println("=" * 80)
-    println("Statistical Density Modeling Pipeline for Scapula")
+    println("Statistical Density Modeling Pipeline — Scapula (AAM-style)")
     println("=" * 80)
-    println(s"NRRD data directory : ${nrrdDir.getAbsolutePath}")
-    println(s"Output directory    : ${densityOutDir.getAbsolutePath}")
+    println(s"NRRD input  : ${nrrdDir.getAbsolutePath}")
+    println(s"Output      : ${densityOutDir.getAbsolutePath}")
 
-    // --- Discover paired NRRD files ---
     val specimens = NrrdData.discoverSpecimens(nrrdDir)
     println(s"\nFound ${specimens.length} paired specimens:")
     specimens.foreach(s => println(s"  ${s.id}"))
 
     if (specimens.isEmpty) {
-      println("\nERROR: No specimens found. Check SCAPULA_NRRD_DIR points to the correct folder.")
-      println(s"Expected files: *_volume.nrrd + *_scapula_0.seg.nrrd")
+      println("\nERROR: No specimens found. Check SCAPULA_NRRD_DIR.")
+      println("Expected: *_volume.nrrd + *_scapula_0.seg.nrrd")
       sys.exit(1)
     }
+    if (specimens.length < 3)
+      println("\nWARNING: Fewer than 3 specimens — density model will have trivial statistics.")
 
-    if (specimens.length < 3) {
-      println("\nWARNING: Fewer than 3 specimens — the density model will have trivial statistics.")
-    }
+    val preprocessed                 = stage1_preprocess(specimens)
+    val (refMesh, rigidAligned)      = stage2_rigidAlign(preprocessed)
+    val registered                   = stage3_nonrigidRegister(refMesh, rigidAligned)
+    val huFields                     = stage4_sampleHU(refMesh, registered)
+    val densityModel                 = stage5_buildModel(refMesh, huFields, registered)
 
-    // --- Run stages ---
-    val preprocessed = stage1_preprocess(specimens)
-
-    val (refMesh, rigidAligned) = stage2_rigidAlign(preprocessed)
-
-    val registered = stage3_nonrigidRegister(refMesh, rigidAligned)
-
-    val huFields = stage4_sampleHU(refMesh, registered)
-
-    val densityModel = stage5_buildModel(refMesh, huFields, registered)
-
-    // --- Summary ---
     println()
     println("=" * 80)
-    println("PIPELINE COMPLETE")
+    println("COMPLETE")
     println("=" * 80)
-    println(s"  Specimens processed : ${specimens.length}")
-    println(f"  Model rank          : ${densityModel.k}")
-    println(f"  Variance (PC1-5)    : ${densityModel.explainedVarianceRatio(5) * 100}%.1f%%")
-    println(s"  Results in          : ${densityOutDir.getAbsolutePath}")
+    println(s"  Specimens : ${specimens.length}")
+    println(s"  Model rank: ${densityModel.k}")
+    println(f"  PC1-5 variance explained: ${densityModel.explainedVarianceRatio(5) * 100}%.1f%%")
+    println(s"  Output dir: ${densityOutDir.getAbsolutePath}")
     println()
-    println("  Outputs:")
-    println("    density_model.csv          – mean HU + principal components at each vertex")
-    println("    density_scores.csv         – per-specimen scores on each PC")
-    println("    reference_mesh_meanHU.csv  – reference mesh vertices with mean HU values")
+    println("  Output files:")
+    println("    raw_hu_per_specimen/<id>_HU.csv  ← raw Hounsfield Units at each vertex")
+    println("    reference_mesh_meanHU.csv         ← mean HU mapped to reference mesh")
+    println("    density_model.csv                 ← mean + PC1-5 at every vertex")
+    println("    density_scores.csv                ← per-specimen latent scores")
     println()
-    println("  Next steps:")
-    println("    • Open reference_mesh_meanHU.csv in ParaView or 3D Slicer to visualise bone density")
-    println("    • Use density_scores.csv for downstream statistics (age/sex regression, pathology detection)")
-    println("    • Build a joint shape+density model with StatisticalDensityModel.buildJoint()")
+    println("  Visualise: open reference_mesh_meanHU.csv in ParaView or 3D Slicer")
+    println("  Joint shape+density model: StatisticalDensityModel.buildJoint(...)")
   }
 }

@@ -1,7 +1,8 @@
 package scapula
 
 import scalismo.geometry.*
-import scalismo.image.*
+import scalismo.image.DiscreteImage
+import scalismo.image.interpolation.LinearImageInterpolator3D
 import scalismo.io.ImageIO
 import scalismo.mesh.*
 
@@ -13,18 +14,16 @@ import java.io.File
  * File naming convention expected (from 3D Slicer exports):
  *   <id>_volume.nrrd          -- raw CT intensities in Hounsfield Units (stored as Short)
  *   <id>_scapula_0.seg.nrrd   -- binary label map: 1 = scapula, 0 = background
+ *
+ * If a pre-extracted <id>.stl surface mesh also sits in the same directory it is
+ * preferred over running Marching Cubes (faster, and avoids the dependency).
  */
 object NrrdData {
 
-  /** One CT specimen: matched volume + segmentation paths. */
-  final case class CtSpecimen(id: String, volumeFile: File, segFile: File)
+  final case class CtSpecimen(id: String, volumeFile: File, segFile: File, stlFile: Option[File])
 
-  /**
-   * Scans a directory for pairs of *_volume.nrrd and *_scapula_0.seg.nrrd files.
-   * Specimens without both files are silently skipped.
-   */
   def discoverSpecimens(dir: File): IndexedSeq[CtSpecimen] = {
-    val all = Option(dir.listFiles()).getOrElse(Array.empty[File])
+    val all    = Option(dir.listFiles()).getOrElse(Array.empty[File])
     val byName = all.map(f => f.getName -> f).toMap
 
     all
@@ -32,65 +31,68 @@ object NrrdData {
       .sortBy(_.getName)
       .flatMap { vol =>
         val id  = vol.getName.stripSuffix("_volume.nrrd")
-        val seg = byName.get(s"${id}_scapula_0.seg.nrrd")
-        seg.map(s => CtSpecimen(id, vol, s))
+        byName.get(s"${id}_scapula_0.seg.nrrd").map { seg =>
+          val stl = byName.get(s"$id.stl")
+          CtSpecimen(id, vol, seg, stl)
+        }
       }
       .toIndexedSeq
   }
 
-  /** Read the raw CT volume. Values are in Hounsfield Units (Short range). */
   def loadVolume(file: File): DiscreteImage[_3D, Short] =
     ImageIO
       .read3DScalarImage[Short](file)
       .getOrElse(throw new RuntimeException(s"Cannot read CT volume: ${file.getName}"))
 
-  /** Read the binary segmentation label map (values 0 or 1, stored as Short). */
   def loadSegmentation(file: File): DiscreteImage[_3D, Short] =
     ImageIO
       .read3DScalarImage[Short](file)
       .getOrElse(throw new RuntimeException(s"Cannot read segmentation: ${file.getName}"))
 
   /**
-   * Extract a surface mesh from the binary segmentation using Marching Cubes.
+   * Extract a surface mesh from a binary segmentation.
    *
-   * The segmentation values are 0/1; isoValue 0.5 places the surface exactly halfway.
-   * The output is in the same world-coordinate frame as the CT volume (millimetres).
+   * Prefers a pre-exported STL (faster).  Falls back to Marching Cubes from
+   * the segmentation.  If neither works the exception message tells the user to
+   * export an STL from 3D Slicer instead.
    */
-  def extractSurface(seg: DiscreteImage[_3D, Short]): TriangleMesh[_3D] = {
-    val floatImg: DiscreteImage[_3D, Float] = seg.map(_.toFloat)
-    MarchingCubes.marchingCubes(floatImg, isoValue = 0.5)
+  def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] = {
+    spec.stlFile match {
+      case Some(f) =>
+        MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot read STL: ${f.getName}"))
+
+      case None =>
+        val seg      = loadSegmentation(spec.segFile)
+        val floatSeg = seg.map(_.toFloat)
+        // MarchingCubes lives in scalismo.mesh
+        try scalismo.mesh.MarchingCubes.marchingCubes(floatSeg, isoValue = 0.5)
+        catch {
+          case e: Exception =>
+            throw new RuntimeException(
+              s"Marching Cubes failed for ${spec.id}: ${e.getMessage}\n" +
+              "Tip: export the segmentation as a surface model (STL) from 3D Slicer and place it\n" +
+              s"next to the NRRD files as ${spec.id}.stl — it will be loaded automatically.",
+              e
+            )
+        }
+    }
   }
 
   /**
-   * Sample Hounsfield Units at the given mesh vertices using B-spline interpolation.
-   *
-   * Points that fall outside the volume domain (e.g. after registration) are assigned
-   * the HU value for air (−1000), which is the physically correct outside value for CT.
+   * Sample Hounsfield Units at mesh vertices using linear interpolation of the CT volume.
+   * Points outside the CT volume domain fall back to −1000 HU (air).
    */
   def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Short]): IndexedSeq[Float] = {
-    // degree-3 B-spline gives continuous interpolation across voxels
-    val continuous = volume.interpolate(3)
+    val interp = volume.interpolate(LinearImageInterpolator3D[Short]())
     mesh.pointSet.points.map { pt =>
-      if (volume.isDefinedAt(pt)) continuous(pt).toFloat
-      else -1000f
+      try interp(pt).toFloat
+      catch { case _: Exception => -1000f }
     }.toIndexedSeq
   }
 
-  /**
-   * Compute simple per-vertex HU statistics useful for a sanity check:
-   * returns (minHU, maxHU, meanHU) over the provided vertex HU array.
-   */
-  def huStats(hu: IndexedSeq[Float]): (Float, Float, Float) = {
-    val mn  = hu.min
-    val mx  = hu.max
-    val avg = hu.sum / hu.length
-    (mn, mx, avg)
-  }
+  def huStats(hu: IndexedSeq[Float]): (Float, Float, Float) =
+    (hu.min, hu.max, hu.sum / hu.length)
 
-  /**
-   * Cortical-bone mask: returns true for vertices whose HU is above a threshold
-   * commonly used to distinguish cortical bone (>300 HU) from trabecular bone / soft tissue.
-   */
   def corticalMask(hu: IndexedSeq[Float], threshold: Float = 300f): IndexedSeq[Boolean] =
     hu.map(_ >= threshold)
 }
