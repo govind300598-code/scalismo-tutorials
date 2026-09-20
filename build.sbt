@@ -8,7 +8,9 @@ resolvers += Resolver.jcenterRepo
 
 libraryDependencies ++= Seq(
   "ch.unibas.cs.gravis" %% "scalismo-ui" % "0.92.0",
-  "ch.unibas.cs.gravis" %% "scalismo"    % "0.92.1"
+  "ch.unibas.cs.gravis" %% "scalismo"    % "0.92.1",
+  // Scalismo already pulls in Breeze; we make it explicit for SVD in DensityModel.
+  "org.scalanlp" %% "breeze" % "2.1.0"
 )
 
 // The pipeline holds several meshes plus a low-rank GP basis in memory.
