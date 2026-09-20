@@ -34,8 +34,11 @@ object Config {
    */
   val refinePasses: Int = env("SCAPULA_REFINE_PASSES", "2").toInt
 
-  /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior. Smaller => higher rank. */
-  val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.01").toDouble
+  /** Relative tolerance for the pivoted-Cholesky low-rank approximation of the GP prior.
+   *  0.05 = fast (Lüthi Tutorial 12 default, rank ~40-60, ~20 min / 2 specimens).
+   *  0.01 = quality (Dennis Madsen, rank ~150-300, ~2 hrs / 2 specimens).
+   *  Override: SCAPULA_GP_TOL=0.01 sbt "runMain ..." for the final run. */
+  val gpRelativeTolerance: Double = env("SCAPULA_GP_TOL", "0.05").toDouble
 
   /** Hard cap on the rank of the GP prior (keeps memory and posterior cost bounded). */
   val gpMaxRank: Int = env("SCAPULA_GP_MAX_RANK", "250").toInt
