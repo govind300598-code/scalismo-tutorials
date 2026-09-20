@@ -108,13 +108,17 @@ object DensityPipeline {
     val (refSpec, refMesh, refHU) = data.head
     println(s"  Reference: ${refSpec.id}")
 
-    val aligned = data.tail.map { case (spec, mesh, hu) =>
+    val buf = scala.collection.mutable.ArrayBuffer[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float])]()
+    buf += ((refSpec, refMesh, refHU))
+
+    for ((spec, mesh, hu) <- data.tail) {
       val alignedMesh = RigidAlign.rigidIcp(mesh, refMesh, iterations = Config.icpIterations)
       val d = Metrics.symmetric(alignedMesh, refMesh)
       println(f"  ${spec.id} -> ${d.render}")
-      (spec, alignedMesh, hu)
+      buf += ((spec, alignedMesh, hu))
+      System.gc()
     }
-    (refMesh, (refSpec, refMesh, refHU) +: aligned)
+    (refMesh, buf.toIndexedSeq)
   }
 
   // ---------------------------------------------------------------------------
