@@ -31,6 +31,9 @@ object ReferenceSelection {
 
   final case class Ranked(specimen: ScapulaData.Specimen, meanDistanceToOthers: Double, worstPairHd: Double)
 
+  /** One entry of the full pairwise distance matrix: `a` rigidly aligned onto `b`. */
+  final case class Pairwise(a: String, b: String, stats: Metrics.SurfaceStats)
+
   /**
    * One mesh per subject (or per side if `Config.buildIndependentModel` is false), decimated to `resolution`, all
    * expressed in the LEFT-scapula frame (right-side specimens mirrored). Restricting to one side per subject by
@@ -64,16 +67,22 @@ object ReferenceSelection {
     Metrics.symmetric(aligned, fixed.mesh)
   }
 
-  /**
-   * Full O(n^2) pairwise rigid-alignment distance matrix over an already-loaded pool. Returns the medoid and the
-   * full ranking (best/most-average first).
-   */
-  def medoid(pool: IndexedSeq[Pool])(implicit rng: Random): (Pool, IndexedSeq[Ranked]) = {
+  /** The full O(n^2) pairwise rigid-alignment distance matrix over an already-loaded pool (asymmetric: a->b uses
+    * a aligned onto b, which need not equal b aligned onto a). This is the underlying "distance error matrix". */
+  def pairwiseDistanceMatrix(pool: IndexedSeq[Pool])(implicit rng: Random): IndexedSeq[Pairwise] =
+    for {
+      a <- pool
+      b <- pool
+      if a.specimen.modelId != b.specimen.modelId
+    } yield Pairwise(a.specimen.modelId, b.specimen.modelId, alignedDistance(a, b))
+
+  /** Ranks every pool member by mean distance to everyone else and returns the medoid (rank #1). */
+  def medoid(pool: IndexedSeq[Pool], matrix: IndexedSeq[Pairwise]): (Pool, IndexedSeq[Ranked]) = {
     require(pool.size >= 3, s"Need at least 3 subjects to pick a medoid reference, found ${pool.size}")
+    val byA = matrix.groupBy(_.a)
 
     val ranked = pool.map { a =>
-      val others = pool.filter(_.specimen.modelId != a.specimen.modelId)
-      val distances = others.map(b => alignedDistance(a, b))
+      val distances = byA.getOrElse(a.specimen.modelId, IndexedSeq.empty).map(_.stats)
       val meanOfMeans = distances.map(_.mean).sum / distances.length
       val worstHd = distances.map(_.hd).max
       println(f"    ${a.specimen.modelId}%-24s mean-to-others=$meanOfMeans%6.2f mm   worst-pair-HD=$worstHd%7.2f mm")
@@ -87,7 +96,11 @@ object ReferenceSelection {
     (pool.find(_.specimen.modelId == best.specimen.modelId).get, ranked)
   }
 
-  /** Convenience: loads the pool and picks the medoid in one call. */
-  def chooseReference(dir: File, resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked]) =
-    medoid(loadPool(dir, resolution))
+  /** Convenience: loads the pool, computes the full pairwise matrix, and picks the medoid in one call. */
+  def chooseReference(dir: File, resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) = {
+    val pool = loadPool(dir, resolution)
+    val matrix = pairwiseDistanceMatrix(pool)
+    val (best, ranked) = medoid(pool, matrix)
+    (best, ranked, matrix)
+  }
 }
