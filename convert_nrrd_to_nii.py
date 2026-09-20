@@ -45,6 +45,7 @@ for src in files:
         continue
     try:
         img = sitk.ReadImage(src)
+        img = sitk.Cast(img, sitk.sitkInt16)  # HU fits in Int16; avoids 32-bit allocations in Scalismo
         sitk.WriteImage(img, dst)
         size = os.path.getsize(dst) // (1024 * 1024)
         print(f"  OK  {os.path.basename(dst)}  ({size} MB)")
