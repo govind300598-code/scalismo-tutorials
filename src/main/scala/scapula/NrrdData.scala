@@ -9,34 +9,54 @@ import scalismo.mesh.*
 import java.io.File
 
 /**
- * Discovers, loads and preprocesses paired CT volume / segmentation NRRD files.
+ * Discovers, loads and preprocesses paired CT volume + STL surface files.
  *
- * File naming convention expected (from 3D Slicer exports):
- *   <id>_volume.nrrd          -- raw CT intensities in Hounsfield Units (stored as Short)
- *   <id>_scapula_0.seg.nrrd   -- binary label map: 1 = scapula, 0 = background
+ * NRRD directory layout (set SCAPULA_NRRD_DIR):
+ *   <id>_volume.nrrd          — raw CT intensities in Hounsfield Units (Short)
+ *   <id>_scapula_0.seg.nrrd   — binary segmentation (not needed if STL present)
  *
- * A pre-extracted <id>.stl surface mesh must sit in the same directory.
- * Export the surface model from 3D Slicer (Models module → Export as STL).
+ * STL directory layout (set SCAPULA_STL_DIR):
+ *   <id>_scapula_0_Segment_2.stl   — one scapula (e.g. left)
+ *   <id>_scapula_0_Segment_3.stl   — other scapula (e.g. right)
+ *
+ * Each STL file becomes one CtSpecimen entry.  Both segments of the same
+ * subject share the same CT volume, so HU is sampled from that volume for
+ * whichever surface is being processed.
  */
 object NrrdData {
 
-  final case class CtSpecimen(id: String, volumeFile: File, segFile: File, stlFile: Option[File])
+  /**
+   * @param id         unique label for this specimen (derived from STL filename)
+   * @param volumeFile paired CT volume NRRD
+   * @param stlFile    scapula surface STL
+   */
+  final case class CtSpecimen(id: String, volumeFile: File, stlFile: File)
 
-  def discoverSpecimens(dir: File): IndexedSeq[CtSpecimen] = {
-    val all    = Option(dir.listFiles()).getOrElse(Array.empty[File])
-    val byName = all.map(f => f.getName -> f).toMap
-
-    all
+  /**
+   * Discover all paired (volume.nrrd, STL) specimens.
+   *
+   * For every `*_volume.nrrd` in nrrdDir, all STL files in stlDir whose
+   * base name starts with the volume's id are returned as separate entries.
+   * Names with spaces or "marche pas" / "scaling" suffixes are handled
+   * automatically because the match is prefix-based.
+   */
+  def discoverSpecimens(nrrdDir: File, stlDir: File): IndexedSeq[CtSpecimen] = {
+    val volumeFiles = Option(nrrdDir.listFiles()).getOrElse(Array.empty[File])
       .filter(_.getName.endsWith("_volume.nrrd"))
       .sortBy(_.getName)
-      .flatMap { vol =>
-        val id  = vol.getName.stripSuffix("_volume.nrrd")
-        byName.get(s"${id}_scapula_0.seg.nrrd").map { seg =>
-          val stl = byName.get(s"$id.stl")
-          CtSpecimen(id, vol, seg, stl)
-        }
+
+    val stlFiles = Option(stlDir.listFiles()).getOrElse(Array.empty[File])
+      .filter(_.getName.endsWith(".stl"))
+
+    volumeFiles.flatMap { vol =>
+      val volId = vol.getName.stripSuffix("_volume.nrrd")
+      // find STL files whose name starts with this volume's id
+      val matching = stlFiles.filter(_.getName.startsWith(volId))
+      matching.map { stl =>
+        val specId = stl.getName.stripSuffix(".stl")
+        CtSpecimen(specId, vol, stl)
       }
-      .toIndexedSeq
+    }.toIndexedSeq
   }
 
   def loadVolume(file: File): DiscreteImage[_3D, Short] =
@@ -44,26 +64,9 @@ object NrrdData {
       .read3DScalarImage[Short](file)
       .getOrElse(throw new RuntimeException(s"Cannot read CT volume: ${file.getName}"))
 
-  def loadSegmentation(file: File): DiscreteImage[_3D, Short] =
-    ImageIO
-      .read3DScalarImage[Short](file)
-      .getOrElse(throw new RuntimeException(s"Cannot read segmentation: ${file.getName}"))
-
-  /**
-   * Load a pre-exported STL surface mesh.  Marching Cubes is not available in Scalismo 0.92.x,
-   * so the STL must be exported from 3D Slicer (Segment Editor → Export to Files → STL).
-   */
   def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] =
-    spec.stlFile match {
-      case Some(f) =>
-        MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot read STL: ${f.getName}"))
-      case None =>
-        throw new RuntimeException(
-          s"No STL surface mesh found for ${spec.id}.\n" +
-          "Export the scapula segmentation as a surface model (STL) from 3D Slicer\n" +
-          s"and place it next to the NRRD files as ${spec.id}.stl"
-        )
-    }
+    MeshIO.readMesh(spec.stlFile)
+      .getOrElse(throw new RuntimeException(s"Cannot read STL: ${spec.stlFile.getName}"))
 
   /**
    * Sample Hounsfield Units at mesh vertices using nearest-neighbour voxel lookup.
