@@ -40,11 +40,30 @@ ok = 0
 skip = 0
 fail = 0
 
+def already_converted(path):
+    """True if `path` is a NIfTI-1 file already cast to Int16 with scl_slope/scl_inter
+    zeroed out — i.e. produced by a previous run of this exact script. Anything else
+    (missing file, wrong dtype, non-zero scaling) must be reconverted."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(348)
+        if len(header) < 348:
+            return False
+        magic = header[344:348]
+        if magic not in (b"n+1\x00", b"ni1\x00"):
+            return False
+        datatype = struct.unpack("<h", header[70:72])[0]
+        scl_slope, scl_inter = struct.unpack("<ff", header[112:120])
+        DT_INT16 = 4
+        return datatype == DT_INT16 and scl_slope == 0.0 and scl_inter == 0.0
+    except OSError:
+        return False
+
 for src in files:
     dst = src[:-5] + ".nii"   # replace .nrrd with .nii (uncompressed; Scalismo 0.92.x needs this)
     basename = os.path.basename(src)
-    if os.path.exists(dst):
-        print(f"  SKIP (already exists): {os.path.basename(dst)}")
+    if already_converted(dst):
+        print(f"  SKIP (already Int16, scl_slope=0): {os.path.basename(dst)}")
         skip += 1
         continue
     try:
