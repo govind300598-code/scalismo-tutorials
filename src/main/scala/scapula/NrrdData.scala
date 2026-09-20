@@ -59,20 +59,36 @@ object NrrdData {
     }.toIndexedSeq
   }
 
+  /**
+   * Load a CT volume as a Float image.
+   *
+   * Scalismo 0.92.x ImageIO supports NIfTI (.nii / .nii.gz) but NOT .nrrd directly.
+   * When given a .nrrd path we look for a sibling .nii.gz first (produced by
+   * convert_nrrd_to_nii.py).  Run that script once before the pipeline:
+   *
+   *   python3 convert_nrrd_to_nii.py "/path/to/all ct from hoel 3d"
+   */
   def loadVolume(file: File): DiscreteImage[_3D, Float] = {
-    if (!file.exists())
-      throw new RuntimeException(s"CT volume file not found: ${file.getAbsolutePath}")
-    if (!file.canRead)
-      throw new RuntimeException(s"CT volume file not readable (permissions?): ${file.getAbsolutePath}")
-    ImageIO.read3DScalarImage[Float](file) match {
+    // Prefer .nii.gz sibling; fall back to the original path (works if already .nii.gz)
+    val candidate: File =
+      if (file.getName.endsWith(".nrrd")) {
+        val nii = new File(file.getParent, file.getName.stripSuffix(".nrrd") + ".nii.gz")
+        if (nii.exists()) nii else file
+      } else file
+
+    if (!candidate.exists())
+      throw new RuntimeException(
+        s"CT volume not found: ${candidate.getAbsolutePath}\n" +
+        (if (file.getName.endsWith(".nrrd"))
+           s"Convert NRRD to NIfTI first:\n  python3 convert_nrrd_to_nii.py \"${file.getParent}\""
+         else ""))
+
+    ImageIO.read3DScalarImage[Float](candidate) match {
       case scala.util.Success(img) => img
       case scala.util.Failure(ex) =>
-        // Print full stack trace to help diagnose (type mismatch, bad NRRD header, etc.)
-        ex.printStackTrace()
         throw new RuntimeException(
-          s"Cannot read CT volume as Float: ${file.getAbsolutePath}\n" +
-          s"Root cause — ${ex.getClass.getSimpleName}: ${ex.getMessage}\n" +
-          s"(Stack trace printed above)", ex)
+          s"Cannot read CT volume: ${candidate.getAbsolutePath}\n" +
+          s"Cause: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)
     }
   }
 
