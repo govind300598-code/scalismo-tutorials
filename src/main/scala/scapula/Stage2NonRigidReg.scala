@@ -69,16 +69,16 @@ object Stage2NonRigidReg {
   )
 
   /**
-   * 5-pass coarse-to-fine schedule (Lüthi GPMM paper / Alemneh thesis).
-   * Extra intermediate pass at λ=1e-3 improves convergence when the multi-scale
-   * kernel has higher rank than a single-scale kernel.
+   * 4-pass coarse-to-fine schedule.
+   * λ values and iteration counts follow Dennis Madsen's scapula recommendation
+   * (Scalismo forum, Jun 2024).  Sample counts are increased from his demo
+   * values (100/500/100/5000) to be adequate for real inter-subject data.
    */
   val regSchedule: IndexedSeq[RegistrationParameters] = IndexedSeq(
-    RegistrationParameters(1e-1, 30, 1000),
-    RegistrationParameters(1e-2, 40, 1000),
-    RegistrationParameters(1e-3, 50, 2000),
+    RegistrationParameters(1e-1, 50, 1000),
+    RegistrationParameters(1e-2, 50, 1000),
     RegistrationParameters(1e-4, 50, 2000),
-    RegistrationParameters(1e-6, 80, 4000)
+    RegistrationParameters(1e-6, 50, 5000)
   )
 
   // -------------------------------------------------------------------------
@@ -140,14 +140,12 @@ object Stage2NonRigidReg {
 
   /**
    * Builds a zero-mean GP over the reference mesh using a MULTI-SCALE Gaussian
-   * kernel — a sum of three GaussianKernel3D at (σ, s), (σ/2, s/2), (σ/4, s/4).
+   * kernel with three scales at σ, σ*0.4, σ*0.2.
    *
-   * Why multi-scale (Lüthi GPMM paper §3.2, Tutorial 12):
-   *   - Large σ captures global shape variation (whole-blade bending).
-   *   - Medium σ captures regional variation (glenoid fossa, spine).
-   *   - Small σ captures local detail (acromion tip, coracoid).
-   *   A single kernel can only trade off reach against detail; their sum
-   *   provides both simultaneously and is strictly more expressive.
+   * Sigma ratios from Dennis Madsen's scapula guide (Scalismo forum Jun 2024):
+   *   longest_side/2 : longest_side/5 : longest_side/10
+   *   For a ~150mm scapula: 75 : 30 : 15 mm
+   *   → use gpParams.sigma = 75 (Set 4) to get exactly those values.
    *
    * The GP is conditioned on landmark correspondences (posterior GP) so the
    * posterior mean already maps each reference landmark towards the
@@ -163,14 +161,19 @@ object Stage2NonRigidReg {
       lmNoiseStdMm: Double = 2.0
   ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
 
-    // Multi-scale kernel: 3 Gaussians at σ, σ/2, σ/4 with s, s/2, s/4.
-    // Sum of PDKernels is a PDKernel, so the GP remains valid.
+    // Multi-scale kernel following Dennis Madsen's scapula guide (Jun 2024):
+    //   σ_coarse = longest_side / 2  ≈ 75 mm   (whole-blade bending)
+    //   σ_mid    = longest_side / 5  ≈ 30 mm   (glenoid fossa, spine)
+    //   σ_fine   = longest_side / 10 ≈ 15 mm   (acromion tip, coracoid)
+    // With gpParams.sigma = 75 (Set 4 — Madsen) these give EXACTLY his values.
+    // Amplitude ratios match his demo: 1 : 2/3 : 1/3.
+    // relativeTolerance = 0.01 (his exact value).
     val σ = gpParams.sigma
     val s = gpParams.scaleFactor
     val scalarKernel =
-      GaussianKernel3D(σ,       s      ) +
-      GaussianKernel3D(σ / 2.0, s / 2.0) +
-      GaussianKernel3D(σ / 4.0, s / 4.0)
+      GaussianKernel3D(σ,        s             ) +   // coarse  σ
+      GaussianKernel3D(σ * 0.4,  s * 0.67      ) +   // mid     σ*0.4  (≈ longest/5)
+      GaussianKernel3D(σ * 0.2,  s * 0.33      )     // fine    σ*0.2  (≈ longest/10)
 
     val zeroMean = Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector.zeros[_3D])
     val kernel   = DiagonalKernel3D(scalarKernel, outputDim = 3)
@@ -179,10 +182,11 @@ object Stage2NonRigidReg {
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       refMesh,
       gp,
-      Config.gpRelativeTolerance,
+      Config.gpRelativeTolerance,  // 0.01 — Dennis's exact value
       TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
-    println(s"    GP rank=${lowRankGP.rank}  σ=($σ, ${σ/2}, ${σ/4})  s=($s, ${s/2}, ${s/4})")
+    val σ2 = f"${σ * 0.4}%.1f"; val σ3 = f"${σ * 0.2}%.1f"
+    println(s"    GP rank=${lowRankGP.rank}  σ=($σ,$σ2,$σ3)  s=($s,${(s*0.67).toInt},${(s*0.33).toInt})")
 
     // Posterior conditioned on landmark observations.
     val lmNoise = MultivariateNormalDistribution(

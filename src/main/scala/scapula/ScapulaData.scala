@@ -20,8 +20,9 @@ object Config {
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
-  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
+  /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution.
+   *  Dennis Madsen recommends 10000 for scapulae; increase for more surface detail. */
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "10000").toInt
 
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
