@@ -85,8 +85,9 @@ object NrrdData {
            s"Convert NRRD to NIfTI first:\n  python3 convert_nrrd_to_nii.py \"${file.getParent}\""
          else ""))
 
-    ImageIO.read3DScalarImage[Float](candidate) match {
-      case scala.util.Success(img) => img
+    // CT volumes are stored as Short (HU values); read as Short then convert to Float
+    ImageIO.read3DScalarImage[Short](candidate) match {
+      case scala.util.Success(img) => img.map(_.toFloat)
       case scala.util.Failure(ex) =>
         throw new RuntimeException(
           s"Cannot read CT volume: ${candidate.getAbsolutePath}\n" +
