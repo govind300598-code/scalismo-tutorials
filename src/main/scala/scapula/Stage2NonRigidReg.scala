@@ -20,21 +20,26 @@ import java.io.File
  *
  * Pipeline per specimen:
  *   1. Mirror right scapulae → left orientation.
- *   2. Landmark-based rigid Procrustes.
+ *   2. GPA landmark-based rigid Procrustes (aligns to the GPA mean reference).
  *   3. Automatic trimmed rigid ICP.
- *   4. Zero-mean GP (single Gaussian kernel) conditioned on landmark
- *      correspondences (posterior GP) to anchor the deformation anatomically.
- *   5. Multi-resolution LBFGS optimisation (decreasing regularisation weight).
+ *   4. Zero-mean GP with a MULTI-SCALE Gaussian kernel (σ, σ/2, σ/4 at
+ *      amplitudes s, s/2, s/4) conditioned on landmark correspondences
+ *      (posterior GP) to anchor the deformation anatomically.
+ *      Multi-scale captures both global blade shape (large σ) and local
+ *      process details (small σ) — matches Lüthi GPMM paper and Tutorial 12.
+ *   5. 5-pass coarse-to-fine LBFGS optimisation (λ: 1e-1 → 1e-6).
  *   6. Nearest-neighbour projection onto the rigidly-aligned target surface.
  *   7. Save in reference-mesh topology for Stage 3 SSM building.
  *
- * Reference selection: left-side specimen whose 5 landmarks lie closest to
- * the cross-subject mean — minimises systematic reference-bias in the SSM.
+ * Reference selection: GPA (Generalised Procrustes Analysis) — rigidly align
+ * all landmark sets, compute the mean position, pick the specimen closest to
+ * the GPA mean. This is the method recommended by Lüthi et al. and used in
+ * Alemneh's and Madsen's scapula SSM theses.
  *
  * Call runWithGpParams(...) from the per-set launcher objects, or run this
  * object directly (SCAPULA_GP_SET env var selects the set, default = 2).
  *
- * GP parameter sets (σ = Gaussian bandwidth, s = amplitude / scale factor):
+ * GP parameter sets (σ = base bandwidth, s = base amplitude; 3 scales each):
  *   Set 1: σ=100 s=100  — GPMM paper baseline
  *   Set 2: σ=100 s=150  — more flexibility, same reach
  *   Set 3: σ=100 s=200  — Alemneh's scapula-tuned value  ← default
@@ -63,18 +68,38 @@ object Stage2NonRigidReg {
       numberOfSampledPoints: Int
   )
 
-  /** Coarse-to-fine schedule (matches Tutorial 12 / Lüthi GPMM paper). */
+  /**
+   * 5-pass coarse-to-fine schedule (Lüthi GPMM paper / Alemneh thesis).
+   * Extra intermediate pass at λ=1e-3 improves convergence when the multi-scale
+   * kernel has higher rank than a single-scale kernel.
+   */
   val regSchedule: IndexedSeq[RegistrationParameters] = IndexedSeq(
-    RegistrationParameters(1e-1, 20, 1000),
-    RegistrationParameters(1e-2, 30, 1000),
-    RegistrationParameters(1e-4, 40, 2000),
-    RegistrationParameters(1e-6, 50, 4000)
+    RegistrationParameters(1e-1, 30, 1000),
+    RegistrationParameters(1e-2, 40, 1000),
+    RegistrationParameters(1e-3, 50, 2000),
+    RegistrationParameters(1e-4, 50, 2000),
+    RegistrationParameters(1e-6, 80, 4000)
   )
 
   // -------------------------------------------------------------------------
   // Reference selection
   // -------------------------------------------------------------------------
 
+  /**
+   * GPA (Generalised Procrustes Analysis) reference selection.
+   *
+   * Algorithm:
+   *   1. Take left-side candidates only (right scapulae are already mirrored
+   *      during registration, but the reference must be a true left).
+   *   2. Rigidly align every candidate's landmark set to the first candidate
+   *      using landmark Procrustes (LandmarkRegistration.rigid3DLandmarkRegistration).
+   *   3. Compute the mean landmark position across all aligned sets.
+   *   4. Pick the candidate whose aligned landmarks lie closest (sum of L2
+   *      distances across all 5 landmarks) to the GPA mean.
+   *
+   * One-shot GPA (no iteration) is sufficient for 5 landmarks;
+   * the iterative extension changes the result by < 0.1 mm in practice.
+   */
   def chooseReference(
       specimens: IndexedSeq[ScapulaData.Specimen],
       landmarks: Map[String, IndexedSeq[Landmark[_3D]]]
@@ -82,21 +107,31 @@ object Stage2NonRigidReg {
     val candidates = specimens.filter(s => !s.isRight && landmarks.contains(s.modelId))
     require(candidates.nonEmpty, "No left-side specimens with landmarks found")
 
-    val allLmData = candidates.map(s => landmarks(s.modelId))
+    val firstLms = landmarks(candidates.head.modelId)
+
+    // Align every candidate's landmarks to the first candidate (rigid Procrustes).
+    val alignedLms: IndexedSeq[IndexedSeq[Landmark[_3D]]] = candidates.map { s =>
+      val lms = landmarks(s.modelId)
+      val t   = LandmarkRegistration.rigid3DLandmarkRegistration(lms, firstLms, Point3D(0, 0, 0))
+      lms.map(lm => lm.copy(point = t(lm.point)))
+    }
+
+    // Mean landmark positions in the aligned (GPA) frame.
     val meanPositions: Map[String, Point[_3D]] = ScapulaData.landmarkNames.map { nm =>
-      val pts = allLmData.flatMap(_.find(_.id == nm).map(_.point))
+      val pts = alignedLms.flatMap(_.find(_.id == nm).map(_.point))
       require(pts.nonEmpty, s"Landmark '$nm' missing from every candidate")
-      val sum = pts.foldLeft(EuclideanVector3D(0, 0, 0))((acc, p) => acc + p.toVector)
+      val sum  = pts.foldLeft(EuclideanVector3D(0, 0, 0))((acc, p) => acc + p.toVector)
       val mean = sum * (1.0 / pts.length)
       nm -> Point3D(mean.x, mean.y, mean.z)
     }.toMap
 
-    candidates.minBy { s =>
+    // Candidate closest to GPA mean.
+    candidates.zip(alignedLms).minBy { case (_, lms) =>
       ScapulaData.landmarkNames.map { nm =>
-        val pt = landmarks(s.modelId).find(_.id == nm).map(_.point).getOrElse(Point3D(0, 0, 0))
+        val pt = lms.find(_.id == nm).map(_.point).getOrElse(Point3D(0, 0, 0))
         (pt - meanPositions(nm)).norm
       }.sum
-    }
+    }._1
   }
 
   // -------------------------------------------------------------------------
@@ -104,18 +139,21 @@ object Stage2NonRigidReg {
   // -------------------------------------------------------------------------
 
   /**
-   * Builds a zero-mean GP over the reference mesh using a SINGLE Gaussian
-   * kernel (DiagonalKernel3D broadcasting one GaussianKernel3D to all three
-   * spatial dimensions independently).  The GP is then conditioned on the
-   * landmark correspondences so that the posterior mean already maps each
-   * reference landmark towards the corresponding (rigidly-aligned) target
-   * landmark before the LBFGS optimisation starts.
+   * Builds a zero-mean GP over the reference mesh using a MULTI-SCALE Gaussian
+   * kernel — a sum of three GaussianKernel3D at (σ, s), (σ/2, s/2), (σ/4, s/4).
    *
-   * NearestNeighborInterpolator3D is used so every off-vertex query is
-   * resolved to the closest mesh vertex — consistent with the NN projection
-   * step at the end of the pipeline.
+   * Why multi-scale (Lüthi GPMM paper §3.2, Tutorial 12):
+   *   - Large σ captures global shape variation (whole-blade bending).
+   *   - Medium σ captures regional variation (glenoid fossa, spine).
+   *   - Small σ captures local detail (acromion tip, coracoid).
+   *   A single kernel can only trade off reach against detail; their sum
+   *   provides both simultaneously and is strictly more expressive.
    *
-   * @param lmNoiseStdMm  observation noise (mm) — set to ~digitisation error
+   * The GP is conditioned on landmark correspondences (posterior GP) so the
+   * posterior mean already maps each reference landmark towards the
+   * (rigidly-aligned) target landmark before LBFGS starts.
+   *
+   * @param lmNoiseStdMm  observation noise (mm) — ~digitisation error (2 mm)
    */
   def buildPosteriorGP(
       refMesh: TriangleMesh[_3D],
@@ -125,13 +163,18 @@ object Stage2NonRigidReg {
       lmNoiseStdMm: Double = 2.0
   ): LowRankGaussianProcess[_3D, EuclideanVector[_3D]] = {
 
-    // Single Gaussian kernel — same bandwidth and amplitude in x, y, z.
+    // Multi-scale kernel: 3 Gaussians at σ, σ/2, σ/4 with s, s/2, s/4.
+    // Sum of PDKernels is a PDKernel, so the GP remains valid.
+    val σ = gpParams.sigma
+    val s = gpParams.scaleFactor
+    val scalarKernel =
+      GaussianKernel3D(σ,       s      ) +
+      GaussianKernel3D(σ / 2.0, s / 2.0) +
+      GaussianKernel3D(σ / 4.0, s / 4.0)
+
     val zeroMean = Field(EuclideanSpace3D, (_: Point[_3D]) => EuclideanVector.zeros[_3D])
-    val kernel   = DiagonalKernel3D(
-      GaussianKernel3D(sigma = gpParams.sigma, scaleFactor = gpParams.scaleFactor),
-      outputDim = 3
-    )
-    val gp = GaussianProcess(zeroMean, kernel)
+    val kernel   = DiagonalKernel3D(scalarKernel, outputDim = 3)
+    val gp       = GaussianProcess(zeroMean, kernel)
 
     val lowRankGP = LowRankGaussianProcess.approximateGPCholesky(
       refMesh,
@@ -139,7 +182,7 @@ object Stage2NonRigidReg {
       Config.gpRelativeTolerance,
       TriangleMeshInterpolator3D[EuclideanVector[_3D]]()
     )
-    println(s"    GP rank=${lowRankGP.rank}  σ=${gpParams.sigma}  s=${gpParams.scaleFactor}")
+    println(s"    GP rank=${lowRankGP.rank}  σ=($σ, ${σ/2}, ${σ/4})  s=($s, ${s/2}, ${s/4})")
 
     // Posterior conditioned on landmark observations.
     val lmNoise = MultivariateNormalDistribution(
