@@ -199,10 +199,24 @@ object ScapulaData {
 /** Surface-distance measures. Kept separate from MeshMetrics so the directionality is explicit. */
 object Metrics {
 
-  /** Distance from every vertex of `from` to the closest point on the SURFACE of `to`. */
-  def surfaceDistances(from: TriangleMesh[_3D], to: TriangleMesh[_3D]): IndexedSeq[Double] = {
-    val ops = to.operations
-    from.pointSet.points.map(p => (p - ops.closestPointOnSurface(p).point).norm).toIndexedSeq
+  /**
+   * Approximate surface distance from a sample of `from` vertices to the nearest vertex of `to`.
+   *
+   * Uses pointSet.findClosestPoint (KD-tree) instead of operations.closestPointOnSurface
+   * (BoundingSpheres) to avoid materialising a boxed Vector[Tuple3] over all triangles, which
+   * OOMs on high-resolution meshes (>100K vertices).  Capped at maxSample points so accumulated
+   * KD-tree objects from prior iterations do not fill the heap.  Accuracy is sufficient for the
+   * alignment-quality log; the ICP itself still uses the full surface query.
+   */
+  def surfaceDistances(from: TriangleMesh[_3D], to: TriangleMesh[_3D],
+                       maxSample: Int = 5000): IndexedSeq[Double] = {
+    val allPts = from.pointSet.points.toIndexedSeq
+    val pts = if (allPts.length <= maxSample) allPts
+              else {
+                val step = allPts.length.toDouble / maxSample
+                (0 until maxSample).map(i => allPts((i * step).toInt))
+              }
+    pts.map(p => (p - to.pointSet.findClosestPoint(p).point).norm)
   }
 
   def percentile(values: IndexedSeq[Double], p: Double): Double = {
