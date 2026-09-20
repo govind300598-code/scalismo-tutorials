@@ -13,7 +13,11 @@ libraryDependencies ++= Seq(
   "org.scalanlp" %% "breeze" % "2.1.0"
 )
 
-// The pipeline holds several meshes plus a low-rank GP basis in memory.
-run / javaOptions ++= Seq("-Xmx20g")
+// 20g assumed more free RAM than the dev machine actually has once the desktop, VS
+// Code, and other apps are running -- it drove the whole system into swap (8/8 GiB
+// used) instead of failing cleanly. 12g fits a 30 GiB machine with real headroom.
+// ExitOnOutOfMemoryError means a genuine heap exhaustion kills the JVM immediately
+// with a clear error instead of the process (and the OS) thrashing indefinitely.
+run / javaOptions ++= Seq("-Xmx12g", "-XX:+ExitOnOutOfMemoryError")
 run / fork := true
 run / connectInput := true
