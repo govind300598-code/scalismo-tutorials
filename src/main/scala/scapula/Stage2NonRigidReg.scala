@@ -75,10 +75,10 @@ object Stage2NonRigidReg {
    * values (100/500/100/5000) to be adequate for real inter-subject data.
    */
   val regSchedule: IndexedSeq[RegistrationParameters] = IndexedSeq(
-    RegistrationParameters(1e-1, 50, 1000),
-    RegistrationParameters(1e-2, 50, 1000),
-    RegistrationParameters(1e-4, 50, 2000),
-    RegistrationParameters(1e-6, 50, 5000)
+    RegistrationParameters(1e-1, 30, 1000),
+    RegistrationParameters(1e-2, 40, 1000),
+    RegistrationParameters(1e-4, 40, 2000),
+    RegistrationParameters(1e-6, 50, 2000)   // 5000→2000: main speed fix
   )
 
   // -------------------------------------------------------------------------

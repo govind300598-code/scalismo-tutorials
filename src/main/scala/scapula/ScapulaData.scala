@@ -21,8 +21,9 @@ object Config {
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution.
-   *  Dennis Madsen recommends 10000 for scapulae; increase for more surface detail. */
-  val modelResolution: Int = env("SCAPULA_MODEL_RES", "10000").toInt
+   *  5000 = fast check/test.  10000 = Dennis Madsen's recommended quality (use for final run).
+   *  Override: SCAPULA_MODEL_RES=10000 sbt "runMain ..." */
+  val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
   /** Non-rigid (GP) ICP iterations per pass. */
   val icpIterations: Int = env("SCAPULA_ICP_ITERS", "40").toInt
