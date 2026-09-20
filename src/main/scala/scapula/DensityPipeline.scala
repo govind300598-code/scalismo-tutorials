@@ -242,8 +242,35 @@ object DensityPipeline {
     if (specimens.length < 3)
       println("\nWARNING: Fewer than 3 specimens — model statistics will be trivial.")
 
-    val preprocessed            = stage1_preprocess(specimens)
-    val (refMesh, rigidAligned) = stage2_rigidAlign(preprocessed)
+    val preprocessed = stage1_preprocess(specimens)
+
+    // ---------------------------------------------------------------------------
+    // Filter: keep only specimens with plausible bone HU (mean >= 50 HU).
+    // Specimens showing mean ≈ −1000 HU have their STL mesh entirely outside
+    // the CT volume (coordinate mismatch).  Those named "marche pas" or
+    // "scaling" are also typically invalid — the HU filter catches them too.
+    // ---------------------------------------------------------------------------
+    val huMin = 50f
+    val (valid, dropped) = preprocessed.partition { case (_, _, hu) =>
+      NrrdData.huStats(hu)._3 >= huMin
+    }
+
+    println(s"\n[Quality Filter] threshold: mean HU >= $huMin")
+    if (dropped.nonEmpty) {
+      println(s"  Dropping ${dropped.length} specimen(s) with invalid HU:")
+      dropped.foreach { case (spec, _, hu) =>
+        val (mn, mx, avg) = NrrdData.huStats(hu)
+        println(f"    DROPPED  ${spec.id}  (mean=$avg%.0f  min=$mn%.0f  max=$mx%.0f HU)")
+      }
+    }
+    println(s"  Retained: ${valid.length} / ${preprocessed.length} specimens")
+
+    if (valid.length < 3) {
+      println("\nERROR: Fewer than 3 valid specimens after quality filter — cannot build a model.")
+      sys.exit(1)
+    }
+
+    val (refMesh, rigidAligned) = stage2_rigidAlign(valid)
     val huFields                = stage3_topologyTransfer(refMesh, rigidAligned)
     val densityModel            = stage4_buildModel(refMesh, huFields)
 
@@ -251,7 +278,9 @@ object DensityPipeline {
     println("=" * 80)
     println("COMPLETE")
     println("=" * 80)
-    println(s"  Specimens processed : ${specimens.length}")
+    println(s"  Specimens total     : ${specimens.length}")
+    println(s"  Dropped (bad HU)    : ${dropped.length}")
+    println(s"  Modelled            : ${valid.length}")
     println(s"  Model rank          : ${densityModel.k}")
     println(f"  PC1-5 var explained : ${densityModel.explainedVarianceRatio(5) * 100}%.1f%%")
     println(s"  Output dir          : ${densityOutDir.getAbsolutePath}")
