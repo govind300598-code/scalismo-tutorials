@@ -59,10 +59,12 @@ object NrrdData {
     }.toIndexedSeq
   }
 
-  def loadVolume(file: File): DiscreteImage[_3D, Short] =
+  def loadVolume(file: File): DiscreteImage[_3D, Float] =
     ImageIO
-      .read3DScalarImage[Short](file)
-      .getOrElse(throw new RuntimeException(s"Cannot read CT volume: ${file.getName}"))
+      .read3DScalarImage[Float](file)
+      .getOrElse(throw new RuntimeException(
+        s"Cannot read CT volume: ${file.getAbsolutePath}\n" +
+        "Check the file exists and is a valid 3D scalar NRRD."))
 
   def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] =
     MeshIO.readMesh(spec.stlFile)
@@ -72,7 +74,7 @@ object NrrdData {
    * Sample Hounsfield Units at mesh vertices using nearest-neighbour voxel lookup.
    * Points outside the CT volume domain fall back to −1000 HU (air).
    */
-  def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Short]): IndexedSeq[Float] = {
+  def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Float]): IndexedSeq[Float] = {
     val domain = volume.domain
     val o  = domain.origin
     val sp = domain.spacing
@@ -83,7 +85,7 @@ object NrrdData {
       val cj = math.round((pt.y - o.y) / sp.y).toInt
       val ck = math.round((pt.z - o.z) / sp.z).toInt
       if (ci >= 0 && ci < nx && cj >= 0 && cj < ny && ck >= 0 && ck < nz)
-        volume(PointId(ci + nx * (cj + ny * ck))).toFloat
+        volume(PointId(ci + nx * (cj + ny * ck)))
       else -1000f
     }.toIndexedSeq
   }

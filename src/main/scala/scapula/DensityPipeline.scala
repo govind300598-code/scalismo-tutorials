@@ -67,10 +67,16 @@ object DensityPipeline {
   def stage1_preprocess(specimens: IndexedSeq[NrrdData.CtSpecimen])
   : IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float])] = {
 
+    // Cache volumes by filename so each CT is loaded only once (multiple STL segments share a volume)
+    val volumeCache = scala.collection.mutable.Map.empty[String, scalismo.image.DiscreteImage[_3D, Float]]
+
     println(s"\n[Stage 1] Preprocessing ${specimens.length} specimens")
     specimens.zipWithIndex.map { case (spec, idx) =>
       println(s"  [${idx + 1}/${specimens.length}] ${spec.id}")
-      val volume = NrrdData.loadVolume(spec.volumeFile)
+      val volume = volumeCache.getOrElseUpdate(
+        spec.volumeFile.getAbsolutePath,
+        NrrdData.loadVolume(spec.volumeFile)
+      )
       val mesh   = NrrdData.extractSurface(spec)
       println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices")
       val hu = NrrdData.sampleHU(mesh, volume)
