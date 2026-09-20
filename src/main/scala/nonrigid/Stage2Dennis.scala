@@ -144,9 +144,9 @@ object Stage2Dennis {
     val modelView  = ui.show(modelGroup, gpmm, "model")
 
     // ------------------------------------------------------------------
-    // Pilot: register first 3 targets (left + mirrored right)
+    // Pilot: register 1 left + 1 right = 2 specimens total
     // ------------------------------------------------------------------
-    val targets = leftSpecimens.drop(1).take(3)
+    val targets = leftSpecimens.drop(1).take(1)
 
     targets.zipWithIndex.foreach { case (spec, idx) =>
       println(s"\n=== [${idx + 1}/3]  ${spec.modelId} ===")
@@ -200,11 +200,11 @@ object Stage2Dennis {
       println(f"  mean surface dist = $meanErr%.2f mm   max = $maxErr%.2f mm")
     }
 
-    // Also register the RIGHT-side specimens (mirror first)
-    val rightSpecimens = specimens.filter(s => s.isRight && landmarks.contains(s.modelId)).take(3)
+    // Also register 1 right-side specimen (mirror first)
+    val rightSpecimens = specimens.filter(s => s.isRight && landmarks.contains(s.modelId)).take(1)
 
     rightSpecimens.zipWithIndex.foreach { case (spec, idx) =>
-      println(s"\n=== [R ${idx + 1}/3]  ${spec.modelId} (mirrored to left) ===")
+      println(s"\n=== [R ${idx + 1}/1]  ${spec.modelId} (mirrored to left) ===")
 
       val rawTarget    = ScapulaData.loadMesh(spec.file)
       val tgtLms       = landmarks(spec.modelId)
