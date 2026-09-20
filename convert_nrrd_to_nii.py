@@ -8,10 +8,14 @@ Usage:
 
 Requires SimpleITK:
     pip install SimpleITK
+
+IMPORTANT — always delete existing .nii files before re-running so they are fully reconverted:
+    rm "/home/g25upadh/Documents/all ct from hoel 3d/"*_volume.nii
 """
 import sys
 import os
 import glob
+import struct
 
 try:
     import SimpleITK as sitk
@@ -47,6 +51,19 @@ for src in files:
         img = sitk.ReadImage(src)
         img = sitk.Cast(img, sitk.sitkInt16)  # HU fits in Int16; avoids 32-bit allocations in Scalismo
         sitk.WriteImage(img, dst)
+
+        # Patch scl_slope and scl_inter to 0.0 in the NIfTI-1 header.
+        # VTK (used internally by Scalismo) applies the slope/intercept rescaling when
+        # scl_slope != 0, upcasting the data to Float32.  Setting both fields to 0.0
+        # tells every NIfTI reader "raw values, no rescaling", so the Int16 voxels
+        # arrive in Scalismo as Short without type conversion.
+        with open(dst, "r+b") as f:
+            f.seek(344)
+            magic = f.read(4)
+            if magic in (b"n+1\x00", b"ni1\x00"):
+                f.seek(112)                          # scl_slope at byte 112, scl_inter at 116
+                f.write(struct.pack("<ff", 0.0, 0.0))
+
         size = os.path.getsize(dst) // (1024 * 1024)
         print(f"  OK  {os.path.basename(dst)}  ({size} MB)")
         ok += 1

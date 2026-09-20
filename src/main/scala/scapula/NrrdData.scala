@@ -61,16 +61,22 @@ object NrrdData {
            s"Convert NRRD to NIfTI first:\n  python3 convert_nrrd_to_nii.py \"${file.getParent}\""
          else ""))
 
-    // Try scalar types in order; no copy — each closure reads directly from the primitive array.
-    def tryShort  = ImageIO.read3DScalarImage[Short](candidate).map(img => HuVolume(img.domain, id => img(id).toFloat))
-    def tryInt    = ImageIO.read3DScalarImage[Int](candidate).map(img   => HuVolume(img.domain, id => img(id).toFloat))
-    def tryFloat  = ImageIO.read3DScalarImage[Float](candidate).map(img => HuVolume(img.domain, id => img(id)))
+    // Try Short (Int16) first — all .nii files must be converted with convert_nrrd_to_nii.py
+    // which casts to Int16 and zeroes scl_slope so VTK does not upcast to Float.
+    // Fall back to Float for edge cases (e.g. already-float source).
+    // tryInt is deliberately omitted: a 32-bit array for a large CT volume can easily
+    // exhaust the 12 GB heap once many meshes and HU vectors have accumulated.
+    def tryShort = ImageIO.read3DScalarImage[Short](candidate).map(img => HuVolume(img.domain, id => img(id).toFloat))
+    def tryFloat = ImageIO.read3DScalarImage[Float](candidate).map(img => HuVolume(img.domain, id => img(id)))
 
-    (tryShort orElse tryInt orElse tryFloat) match {
+    (tryShort orElse tryFloat) match {
       case scala.util.Success(v) => v
       case scala.util.Failure(ex) =>
         throw new RuntimeException(
-          s"Cannot read CT volume: ${candidate.getAbsolutePath}\n" +
+          s"Cannot read CT volume as Short or Float: ${candidate.getAbsolutePath}\n" +
+          s"The file may still be stored as Int32. Delete it and reconvert:\n" +
+          s"  rm \"${candidate.getAbsolutePath}\"\n" +
+          s"  python3 convert_nrrd_to_nii.py \"${file.getParent}\"\n" +
           s"Cause: ${ex.getClass.getSimpleName}: ${ex.getMessage}", ex)
     }
   }
