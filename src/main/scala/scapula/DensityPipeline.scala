@@ -76,7 +76,7 @@ object DensityPipeline {
 
     var globalIdx = 0
     grouped.flatMap { case (_, specsForVol) =>
-      val volume = NrrdData.loadVolume(specsForVol.head.volumeFile)
+      val volume: NrrdData.HuVolume = NrrdData.loadVolume(specsForVol.head.volumeFile)
       val results = specsForVol.map { spec =>
         globalIdx += 1
         println(s"  [$globalIdx/${specimens.length}] ${spec.id}")
