@@ -59,12 +59,22 @@ object NrrdData {
     }.toIndexedSeq
   }
 
-  def loadVolume(file: File): DiscreteImage[_3D, Float] =
-    ImageIO
-      .read3DScalarImage[Float](file)
-      .getOrElse(throw new RuntimeException(
-        s"Cannot read CT volume: ${file.getAbsolutePath}\n" +
-        "Check the file exists and is a valid 3D scalar NRRD."))
+  def loadVolume(file: File): DiscreteImage[_3D, Float] = {
+    if (!file.exists())
+      throw new RuntimeException(s"CT volume file not found: ${file.getAbsolutePath}")
+    if (!file.canRead)
+      throw new RuntimeException(s"CT volume file not readable (permissions?): ${file.getAbsolutePath}")
+    ImageIO.read3DScalarImage[Float](file) match {
+      case scala.util.Success(img) => img
+      case scala.util.Failure(ex) =>
+        // Print full stack trace to help diagnose (type mismatch, bad NRRD header, etc.)
+        ex.printStackTrace()
+        throw new RuntimeException(
+          s"Cannot read CT volume as Float: ${file.getAbsolutePath}\n" +
+          s"Root cause — ${ex.getClass.getSimpleName}: ${ex.getMessage}\n" +
+          s"(Stack trace printed above)", ex)
+    }
+  }
 
   def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] =
     MeshIO.readMesh(spec.stlFile)
