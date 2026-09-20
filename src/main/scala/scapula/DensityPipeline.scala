@@ -9,6 +9,7 @@ import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, Point
 import scalismo.utils.Random
 
 import java.io.File
+import java.time.LocalDate
 
 /**
  * Full Statistical Density Modeling pipeline for the scapula.
@@ -49,8 +50,14 @@ object DensityPipeline {
     sys.env.getOrElse("SCAPULA_NRRD_DIR", "/home/user/Documents/armcortnet_output_B3")
   )
 
+  // Default output folder is date-stamped so each run produces a distinct directory.
+  // Override with SCAPULA_DENSITY_OUT=/your/path if needed.
+  private val runDate: String = LocalDate.now().toString // e.g. 2026-09-20
   val densityOutDir: File = new File(
-    sys.env.getOrElse("SCAPULA_DENSITY_OUT", "/home/user/Documents/scapula_density_out")
+    sys.env.getOrElse(
+      "SCAPULA_DENSITY_OUT",
+      s"/home/user/Documents/scapula_density_sdm_$runDate"
+    )
   )
 
   // ---------------------------------------------------------------------------
