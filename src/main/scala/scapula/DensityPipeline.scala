@@ -67,25 +67,30 @@ object DensityPipeline {
   def stage1_preprocess(specimens: IndexedSeq[NrrdData.CtSpecimen])
   : IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float])] = {
 
-    // Cache volumes by filename so each CT is loaded only once (multiple STL segments share a volume)
-    val volumeCache = scala.collection.mutable.Map.empty[String, scalismo.image.DiscreteImage[_3D, Float]]
-
     println(s"\n[Stage 1] Preprocessing ${specimens.length} specimens")
-    specimens.zipWithIndex.map { case (spec, idx) =>
-      println(s"  [${idx + 1}/${specimens.length}] ${spec.id}")
-      val volume = volumeCache.getOrElseUpdate(
-        spec.volumeFile.getAbsolutePath,
-        NrrdData.loadVolume(spec.volumeFile)
-      )
-      val mesh   = NrrdData.extractSurface(spec)
-      println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices")
-      val hu = NrrdData.sampleHU(mesh, volume)
-      val (minHU, maxHU, meanHU) = NrrdData.huStats(hu)
-      val cFrac = NrrdData.corticalMask(hu).count(identity).toDouble / hu.length
-      println(f"    HU: min=$minHU%.0f  max=$maxHU%.0f  mean=$meanHU%.0f  cortical(>300HU)=${cFrac * 100}%.1f%%")
-      if (meanHU < 50f || meanHU > 2000f)
-        println(s"    !! Unusual mean HU — check segmentation / CT units")
-      (spec, mesh, hu)
+
+    // Group by CT volume so each volume is loaded once then discarded before the next is loaded.
+    // Keeping all volumes in memory simultaneously would exhaust the heap (each ~150 MB as Short).
+    val grouped = specimens.groupBy(_.volumeFile.getAbsolutePath)
+      .toIndexedSeq.sortBy(_._1)
+
+    var globalIdx = 0
+    grouped.flatMap { case (_, specsForVol) =>
+      val volume = NrrdData.loadVolume(specsForVol.head.volumeFile)
+      val results = specsForVol.map { spec =>
+        globalIdx += 1
+        println(s"  [$globalIdx/${specimens.length}] ${spec.id}")
+        val mesh = NrrdData.extractSurface(spec)
+        println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices")
+        val hu = NrrdData.sampleHU(mesh, volume)
+        val (minHU, maxHU, meanHU) = NrrdData.huStats(hu)
+        val cFrac = NrrdData.corticalMask(hu).count(identity).toDouble / hu.length
+        println(f"    HU: min=$minHU%.0f  max=$maxHU%.0f  mean=$meanHU%.0f  cortical(>300HU)=${cFrac * 100}%.1f%%")
+        if (meanHU < 50f || meanHU > 2000f)
+          println(s"    !! Unusual mean HU — check segmentation / CT units")
+        (spec, mesh, hu)
+      }
+      results  // volume goes out of scope here; GC reclaims it before next CT loads
     }
   }
 

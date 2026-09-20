@@ -14,6 +14,6 @@ libraryDependencies ++= Seq(
 )
 
 // The pipeline holds several meshes plus a low-rank GP basis in memory.
-run / javaOptions ++= Seq("-Xmx8g")
+run / javaOptions ++= Seq("-Xmx12g")
 run / fork := true
 run / connectInput := true

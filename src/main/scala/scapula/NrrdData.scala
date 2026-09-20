@@ -68,7 +68,7 @@ object NrrdData {
    *
    *   python3 convert_nrrd_to_nii.py "/path/to/all ct from hoel 3d"
    */
-  def loadVolume(file: File): DiscreteImage[_3D, Float] = {
+  def loadVolume(file: File): DiscreteImage[_3D, Short] = {
     // For .nrrd: prefer .nii sibling (Scalismo 0.92.x reads this), then .nii.gz, then original
     val candidate: File =
       if (file.getName.endsWith(".nrrd")) {
@@ -85,9 +85,10 @@ object NrrdData {
            s"Convert NRRD to NIfTI first:\n  python3 convert_nrrd_to_nii.py \"${file.getParent}\""
          else ""))
 
-    // CT volumes are stored as Short (HU values); read as Short then convert to Float
+    // CT volumes are Short (Hounsfield Units); keep as Short to avoid a large boxed Float copy.
+    // Callers convert individual sampled values to Float as needed.
     ImageIO.read3DScalarImage[Short](candidate) match {
-      case scala.util.Success(img) => img.map(_.toFloat)
+      case scala.util.Success(img) => img
       case scala.util.Failure(ex) =>
         throw new RuntimeException(
           s"Cannot read CT volume: ${candidate.getAbsolutePath}\n" +
@@ -103,7 +104,7 @@ object NrrdData {
    * Sample Hounsfield Units at mesh vertices using nearest-neighbour voxel lookup.
    * Points outside the CT volume domain fall back to −1000 HU (air).
    */
-  def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Float]): IndexedSeq[Float] = {
+  def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Short]): IndexedSeq[Float] = {
     val domain = volume.domain
     val o  = domain.origin
     val sp = domain.spacing
@@ -114,7 +115,7 @@ object NrrdData {
       val cj = math.round((pt.y - o.y) / sp.y).toInt
       val ck = math.round((pt.z - o.z) / sp.z).toInt
       if (ci >= 0 && ci < nx && cj >= 0 && cj < ny && ck >= 0 && ck < nz)
-        volume(PointId(ci + nx * (cj + ny * ck)))
+        volume(PointId(ci + nx * (cj + ny * ck))).toFloat
       else -1000f
     }.toIndexedSeq
   }
