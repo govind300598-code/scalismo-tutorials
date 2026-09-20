@@ -1,13 +1,8 @@
 package scapula
 
-import breeze.linalg.{DenseMatrix, DenseVector}
-import scalismo.common.{Field, RealSpace}
 import scalismo.geometry.*
 import scalismo.image.DiscreteImage
-import scalismo.kernels.{DiagonalKernel, GaussianKernel}
 import scalismo.mesh.TriangleMesh
-import scalismo.numerics.UniformMeshSampler3D
-import scalismo.statisticalmodel.{GaussianProcess, LowRankGaussianProcess, MultivariateNormalDistribution, PointDistributionModel}
 import scalismo.utils.Random
 
 import java.io.File
@@ -18,27 +13,24 @@ import java.time.LocalDate
  *
  * Based on Cootes et al. "A combined active shape and mean appearance model" — the
  * density field (Hounsfield Units at correspondence vertices) plays the role of the
- * texture/appearance, and the pipeline produces both a shape model and a density model,
- * plus an optional joint AAM-style combined model.
+ * texture/appearance, and the pipeline produces a density model plus an optional
+ * AAM-style combined shape+density model.
  *
  * ┌───────────────────────────────────────────────────────────────────────────┐
  * │  Stage 1 — DISCOVER & PREPROCESS                                         │
- * │    Load paired *_volume.nrrd / *_scapula_0.seg.nrrd                     │
- * │    Surface extraction (STL if present, else Marching Cubes)             │
- * │    Quick HU sanity check (bone surface should average 300–1500 HU)      │
+ * │    Load paired *_volume.nrrd / *.stl                                     │
+ * │    Sample HU at each surface vertex (nearest-neighbour voxel lookup)     │
+ * │    Quick HU sanity check (bone surface should average 300–1500 HU)       │
  * ├───────────────────────────────────────────────────────────────────────────┤
  * │  Stage 2 — RIGID ALIGNMENT                                               │
  * │    Trimmed ICP (uses existing RigidAlign object)                         │
+ * │    HU values travel with their vertices through the transform            │
  * ├───────────────────────────────────────────────────────────────────────────┤
- * │  Stage 3 — GP NON-RIGID REGISTRATION                                     │
- * │    Gaussian-process deformation prior → posterior ICP correspondence      │
- * │    Produces reference-topology meshes for all specimens                  │
+ * │  Stage 3 — TOPOLOGY TRANSFER                                             │
+ * │    For every reference vertex, find the closest aligned-specimen vertex  │
+ * │    and borrow its HU value — dense correspondence without GP             │
  * ├───────────────────────────────────────────────────────────────────────────┤
- * │  Stage 4 — HU FIELD SAMPLING                                             │
- * │    Sample HU at registered reference vertices from each specimen's CT    │
- * │    Saves one <id>_HU.csv per specimen in raw_hu_per_specimen/            │
- * ├───────────────────────────────────────────────────────────────────────────┤
- * │  Stage 5 — STATISTICAL DENSITY MODEL                                     │
+ * │  Stage 4 — STATISTICAL DENSITY MODEL                                     │
  * │    PCA on N × P HU matrix → density model                               │
  * │    Optional joint shape+density model (AAM-style)                        │
  * │    Exports CSV files for downstream analysis / visualisation             │
@@ -64,11 +56,11 @@ object DensityPipeline {
   )
 
   // ---------------------------------------------------------------------------
-  // Stage 1 – Discover & preprocess
+  // Stage 1 – Discover, load surface + volume, sample HU at mesh vertices
   // ---------------------------------------------------------------------------
 
   def stage1_preprocess(specimens: IndexedSeq[NrrdData.CtSpecimen])
-  : IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])] = {
+  : IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float], DiscreteImage[_3D, Short])] = {
 
     println(s"\n[Stage 1] Preprocessing ${specimens.length} CT specimens")
     specimens.zipWithIndex.map { case (spec, idx) =>
@@ -86,156 +78,91 @@ object DensityPipeline {
       if (meanHU < 50f || meanHU > 2000f)
         println(s"    !! Unusual mean HU for ${spec.id} — check segmentation / CT units")
 
-      (spec, mesh, volume)
+      (spec, mesh, hu, volume)
     }
   }
 
   // ---------------------------------------------------------------------------
   // Stage 2 – Rigid alignment
+  //
+  // Mesh vertex positions change; HU values are indexed by vertex id so they
+  // travel with the mesh unchanged.
   // ---------------------------------------------------------------------------
 
   def stage2_rigidAlign(
-    data: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]
+    data: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float], DiscreteImage[_3D, Short])]
   )(implicit rng: Random)
-  : (TriangleMesh[_3D], IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]) = {
+  : (TriangleMesh[_3D], IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float])]) = {
 
     println(s"\n[Stage 2] Rigid alignment")
-    val (refSpec, refMesh, refVol) = data.head
+    val (refSpec, refMesh, refHU, _) = data.head
     println(s"  Reference: ${refSpec.id}")
 
-    val aligned = data.tail.map { case (spec, mesh, vol) =>
+    val aligned = data.tail.map { case (spec, mesh, hu, _) =>
       val alignedMesh = RigidAlign.rigidIcp(mesh, refMesh, iterations = Config.icpIterations)
       val d = Metrics.symmetric(alignedMesh, refMesh)
       println(f"  ${spec.id} -> ${d.render}")
-      (spec, alignedMesh, vol)
+      (spec, alignedMesh, hu)
     }
-    (refMesh, (refSpec, refMesh, refVol) +: aligned)
+    (refMesh, (refSpec, refMesh, refHU) +: aligned)
   }
 
   // ---------------------------------------------------------------------------
-  // Stage 3 – GP non-rigid registration
+  // Stage 3 – Topology transfer to reference mesh
   //
-  // Builds a low-rank Gaussian-process deformation prior on the reference mesh,
-  // then fits each target via ICP in deformation space.
+  // For every vertex on the reference mesh, find the closest vertex on the
+  // rigidly-aligned specimen mesh and borrow its HU value.  This gives a
+  // common P-dimensional HU vector for every specimen without requiring GP
+  // non-rigid registration.
   // ---------------------------------------------------------------------------
 
-  def stage3_nonrigidRegister(
+  def stage3_topologyTransfer(
     refMesh: TriangleMesh[_3D],
-    aligned: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]
-  )(implicit rng: Random)
-  : IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])] = {
-
-    println(s"\n[Stage 3] GP non-rigid registration")
-
-    // Two-scale Gaussian kernel: large scale captures global shape variation,
-    // small scale captures local surface detail.
-    val kernel =
-      DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 50.0) * 50.0, outputDim = 3) +
-      DiagonalKernel[_3D](GaussianKernel[_3D](sigma = 10.0) * 10.0, outputDim = 3)
-
-    // Zero-mean GP deformation field over R³
-    val zeroMean = Field[_3D, EuclideanVector[_3D]](RealSpace[_3D])(_ => EuclideanVector(0.0, 0.0, 0.0))
-    val gp       = GaussianProcess(zeroMean, kernel)
-
-    // Nystrom approximation sampled uniformly on the reference mesh
-    val sampler   = UniformMeshSampler3D(refMesh, numberOfPoints = 500)
-    val lowRankGP = LowRankGaussianProcess.approximateGPNystrom(gp, sampler, numBasisFunctions = Config.gpMaxRank)
-    val model     = PointDistributionModel[_3D, TriangleMesh](refMesh, lowRankGP)
-    println(s"  GP rank: ${lowRankGP.rank}")
-
-    aligned.zipWithIndex.map { case ((spec, targetMesh, vol), idx) =>
-      println(s"  [${idx + 1}/${aligned.length}] ${spec.id}")
-      val fittedMesh = gpIcp(model, targetMesh, iterations = Config.icpIterations)
-      val d = Metrics.symmetric(fittedMesh, targetMesh)
-      println(f"    registration residual: ${d.render}")
-      (spec, fittedMesh, vol)
-    }
-  }
-
-  /**
-   * GP-ICP: iterative closest-point in GP deformation space.
-   *
-   * Each iteration samples points on the current best-fit mesh, finds their
-   * closest counterparts on the target surface, then computes the posterior
-   * mean of the shape model given those correspondences.
-   */
-  private def gpIcp(
-    model: PointDistributionModel[_3D, TriangleMesh],
-    target: TriangleMesh[_3D],
-    iterations: Int,
-    numPoints: Int = 500,
-    noiseStdDev: Double = 1.0
-  )(implicit rng: Random): TriangleMesh[_3D] = {
-
-    // Isotropic Gaussian noise on correspondences (in mm)
-    val noiseDist = MultivariateNormalDistribution(
-      DenseVector.zeros[Double](3),
-      DenseMatrix.eye[Double](3) * (noiseStdDev * noiseStdDev)
-    )
-
-    var current   = model.mean
-    val targetOps = target.operations
-
-    for (_ <- 0 until iterations) {
-      val sampled = UniformMeshSampler3D(current, numPoints).sample().map(_._1)
-      val obs = sampled.map { pt =>
-        val closest = targetOps.closestPointOnSurface(pt).point
-        val id      = current.pointSet.findClosestPoint(pt).id
-        (id, closest, noiseDist)
-      }
-      if (obs.nonEmpty) {
-        val posterior = model.posterior(obs)
-        current = posterior.mean
-      }
-    }
-    current
-  }
-
-  // ---------------------------------------------------------------------------
-  // Stage 4 – HU field sampling at reference vertices
-  // ---------------------------------------------------------------------------
-
-  def stage4_sampleHU(
-    refMesh: TriangleMesh[_3D],
-    registered: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]
+    aligned: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], IndexedSeq[Float])]
   ): IndexedSeq[(String, IndexedSeq[Float])] = {
 
-    println(s"\n[Stage 4] Sampling HU at ${refMesh.pointSet.numberOfPoints} reference vertices")
+    println(s"\n[Stage 3] Topology transfer " +
+            s"(${refMesh.pointSet.numberOfPoints} reference vertices)")
 
-    // Raw per-specimen HU folder: one CSV per specimen
+    // Raw per-specimen HU folder: one CSV per specimen in reference topology
     val rawHuDir = new File(densityOutDir, "raw_hu_per_specimen")
     rawHuDir.mkdirs()
 
-    registered.zipWithIndex.map { case ((spec, regMesh, volume), idx) =>
-      val hu = NrrdData.sampleHU(regMesh, volume)
-      val (mn, mx, avg) = NrrdData.huStats(hu)
-      println(f"  [${idx + 1}/${registered.length}] ${spec.id}  HU: min=$mn%.0f max=$mx%.0f mean=$avg%.0f")
+    aligned.zipWithIndex.map { case ((spec, specMesh, specHU), idx) =>
+      println(s"  [${idx + 1}/${aligned.length}] ${spec.id}")
 
-      // ── Per-specimen raw HU CSV (vertex_idx, x, y, z, HU) ──────────────────
+      val mappedHU: IndexedSeq[Float] = refMesh.pointSet.points.map { refPt =>
+        val closestId = specMesh.pointSet.findClosestPoint(refPt).id
+        specHU(closestId.id)
+      }.toIndexedSeq
+
+      val (mn, mx, avg) = NrrdData.huStats(mappedHU)
+      println(f"    mapped HU: min=$mn%.0f  max=$mx%.0f  mean=$avg%.0f")
+
+      // Per-specimen CSV: (vertex_idx, x, y, z, HU) in reference space
       val outFile = new File(rawHuDir, s"${spec.id}_HU.csv")
       val pw = new java.io.PrintWriter(outFile)
       try {
         pw.println("vertex_idx,x,y,z,HU")
-        regMesh.pointSet.points.toIndexedSeq.zipWithIndex.foreach { case (pt, j) =>
-          pw.println(f"$j,${pt.x}%.3f,${pt.y}%.3f,${pt.z}%.3f,${hu(j)}%.1f")
+        refMesh.pointSet.points.toIndexedSeq.zipWithIndex.foreach { case (pt, j) =>
+          pw.println(f"$j,${pt.x}%.3f,${pt.y}%.3f,${pt.z}%.3f,${mappedHU(j)}%.1f")
         }
       } finally pw.close()
 
-      (spec.id, hu)
+      (spec.id, mappedHU)
     }
   }
 
   // ---------------------------------------------------------------------------
-  // Stage 5 – Build and export the Statistical Density Model
+  // Stage 4 – Build and export the Statistical Density Model
   // ---------------------------------------------------------------------------
 
-  def stage5_buildModel(
+  def stage4_buildModel(
     refMesh: TriangleMesh[_3D],
-    huFields: IndexedSeq[(String, IndexedSeq[Float])],
-    registered: IndexedSeq[(NrrdData.CtSpecimen, TriangleMesh[_3D], DiscreteImage[_3D, Short])]
+    huFields: IndexedSeq[(String, IndexedSeq[Float])]
   ): StatisticalDensityModel.DensityModel = {
 
-    println(s"\n[Stage 5] Building Statistical Density Model  (AAM-style)")
+    println(s"\n[Stage 4] Building Statistical Density Model (AAM-style)")
 
     val ids    = huFields.map(_._1)
     val fields = huFields.map(_._2)
@@ -293,17 +220,16 @@ object DensityPipeline {
 
     if (specimens.isEmpty) {
       println("\nERROR: No specimens found. Check SCAPULA_NRRD_DIR.")
-      println("Expected: *_volume.nrrd + *_scapula_0.seg.nrrd")
+      println("Expected: *_volume.nrrd + *.stl  (in the same directory)")
       sys.exit(1)
     }
     if (specimens.length < 3)
       println("\nWARNING: Fewer than 3 specimens — density model will have trivial statistics.")
 
-    val preprocessed                 = stage1_preprocess(specimens)
-    val (refMesh, rigidAligned)      = stage2_rigidAlign(preprocessed)
-    val registered                   = stage3_nonrigidRegister(refMesh, rigidAligned)
-    val huFields                     = stage4_sampleHU(refMesh, registered)
-    val densityModel                 = stage5_buildModel(refMesh, huFields, registered)
+    val preprocessed                = stage1_preprocess(specimens)
+    val (refMesh, rigidAligned)     = stage2_rigidAlign(preprocessed)
+    val huFields                    = stage3_topologyTransfer(refMesh, rigidAligned)
+    val densityModel                = stage4_buildModel(refMesh, huFields)
 
     println()
     println("=" * 80)
@@ -315,7 +241,7 @@ object DensityPipeline {
     println(s"  Output dir: ${densityOutDir.getAbsolutePath}")
     println()
     println("  Output files:")
-    println("    raw_hu_per_specimen/<id>_HU.csv  ← raw Hounsfield Units at each vertex")
+    println("    raw_hu_per_specimen/<id>_HU.csv  ← Hounsfield Units at each reference vertex")
     println("    reference_mesh_meanHU.csv         ← mean HU mapped to reference mesh")
     println("    density_model.csv                 ← mean + PC1-5 at every vertex")
     println("    density_scores.csv                ← per-specimen latent scores")

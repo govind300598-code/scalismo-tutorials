@@ -1,9 +1,9 @@
 package scapula
 
+import scalismo.common.PointId
 import scalismo.geometry.*
 import scalismo.image.DiscreteImage
-import scalismo.image.interpolation.LinearImageInterpolator3D
-import scalismo.io.ImageIO
+import scalismo.io.{ImageIO, MeshIO}
 import scalismo.mesh.*
 
 import java.io.File
@@ -15,8 +15,8 @@ import java.io.File
  *   <id>_volume.nrrd          -- raw CT intensities in Hounsfield Units (stored as Short)
  *   <id>_scapula_0.seg.nrrd   -- binary label map: 1 = scapula, 0 = background
  *
- * If a pre-extracted <id>.stl surface mesh also sits in the same directory it is
- * preferred over running Marching Cubes (faster, and avoids the dependency).
+ * A pre-extracted <id>.stl surface mesh must sit in the same directory.
+ * Export the surface model from 3D Slicer (Models module → Export as STL).
  */
 object NrrdData {
 
@@ -50,43 +50,38 @@ object NrrdData {
       .getOrElse(throw new RuntimeException(s"Cannot read segmentation: ${file.getName}"))
 
   /**
-   * Extract a surface mesh from a binary segmentation.
-   *
-   * Prefers a pre-exported STL (faster).  Falls back to Marching Cubes from
-   * the segmentation.  If neither works the exception message tells the user to
-   * export an STL from 3D Slicer instead.
+   * Load a pre-exported STL surface mesh.  Marching Cubes is not available in Scalismo 0.92.x,
+   * so the STL must be exported from 3D Slicer (Segment Editor → Export to Files → STL).
    */
-  def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] = {
+  def extractSurface(spec: CtSpecimen): TriangleMesh[_3D] =
     spec.stlFile match {
       case Some(f) =>
         MeshIO.readMesh(f).getOrElse(throw new RuntimeException(s"Cannot read STL: ${f.getName}"))
-
       case None =>
-        val seg      = loadSegmentation(spec.segFile)
-        val floatSeg = seg.map(_.toFloat)
-        // MarchingCubes lives in scalismo.mesh
-        try scalismo.mesh.MarchingCubes.marchingCubes(floatSeg, isoValue = 0.5)
-        catch {
-          case e: Exception =>
-            throw new RuntimeException(
-              s"Marching Cubes failed for ${spec.id}: ${e.getMessage}\n" +
-              "Tip: export the segmentation as a surface model (STL) from 3D Slicer and place it\n" +
-              s"next to the NRRD files as ${spec.id}.stl — it will be loaded automatically.",
-              e
-            )
-        }
+        throw new RuntimeException(
+          s"No STL surface mesh found for ${spec.id}.\n" +
+          "Export the scapula segmentation as a surface model (STL) from 3D Slicer\n" +
+          s"and place it next to the NRRD files as ${spec.id}.stl"
+        )
     }
-  }
 
   /**
-   * Sample Hounsfield Units at mesh vertices using linear interpolation of the CT volume.
+   * Sample Hounsfield Units at mesh vertices using nearest-neighbour voxel lookup.
    * Points outside the CT volume domain fall back to −1000 HU (air).
    */
   def sampleHU(mesh: TriangleMesh[_3D], volume: DiscreteImage[_3D, Short]): IndexedSeq[Float] = {
-    val interp = volume.interpolate(LinearImageInterpolator3D[Short]())
+    val domain = volume.domain
+    val o  = domain.origin
+    val sp = domain.spacing
+    val sz = domain.size
+    val nx = sz(0); val ny = sz(1); val nz = sz(2)
     mesh.pointSet.points.map { pt =>
-      try interp(pt).toFloat
-      catch { case _: Exception => -1000f }
+      val ci = math.round((pt.x - o.x) / sp.x).toInt
+      val cj = math.round((pt.y - o.y) / sp.y).toInt
+      val ck = math.round((pt.z - o.z) / sp.z).toInt
+      if (ci >= 0 && ci < nx && cj >= 0 && cj < ny && ck >= 0 && ck < nz)
+        volume(PointId(ci + nx * (cj + ny * ck))).toFloat
+      else -1000f
     }.toIndexedSeq
   }
 
