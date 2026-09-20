@@ -62,18 +62,20 @@ object NrrdData {
   /**
    * Load a CT volume as a Float image.
    *
-   * Scalismo 0.92.x ImageIO supports NIfTI (.nii / .nii.gz) but NOT .nrrd directly.
-   * When given a .nrrd path we look for a sibling .nii.gz first (produced by
-   * convert_nrrd_to_nii.py).  Run that script once before the pipeline:
+   * Scalismo 0.92.x ImageIO supports .nii but NOT .nii.gz or .nrrd directly.
+   * When given a .nrrd path we look for a sibling .nii first, then .nii.gz as fallback
+   * (both produced by convert_nrrd_to_nii.py).  Run that script once before the pipeline:
    *
    *   python3 convert_nrrd_to_nii.py "/path/to/all ct from hoel 3d"
    */
   def loadVolume(file: File): DiscreteImage[_3D, Float] = {
-    // Prefer .nii.gz sibling; fall back to the original path (works if already .nii.gz)
+    // For .nrrd: prefer .nii sibling (Scalismo 0.92.x reads this), then .nii.gz, then original
     val candidate: File =
       if (file.getName.endsWith(".nrrd")) {
-        val nii = new File(file.getParent, file.getName.stripSuffix(".nrrd") + ".nii.gz")
-        if (nii.exists()) nii else file
+        val base   = file.getName.stripSuffix(".nrrd")
+        val nii    = new File(file.getParent, base + ".nii")
+        val niiGz  = new File(file.getParent, base + ".nii.gz")
+        if (nii.exists()) nii else if (niiGz.exists()) niiGz else file
       } else file
 
     if (!candidate.exists())

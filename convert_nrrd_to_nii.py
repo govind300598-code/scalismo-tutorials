@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Convert all *_volume.nrrd files in a directory to *_volume.nii.gz.
-Scalismo 0.92.x ImageIO supports NIfTI but not NRRD directly.
+Convert all *_volume.nrrd files in a directory to *_volume.nii (uncompressed NIfTI).
+Scalismo 0.92.x ImageIO supports .nii but NOT .nii.gz or .nrrd directly.
 
 Usage:
     python3 convert_nrrd_to_nii.py "/home/g25upadh/Documents/all ct from hoel 3d"
@@ -37,7 +37,7 @@ skip = 0
 fail = 0
 
 for src in files:
-    dst = src[:-5] + ".nii.gz"   # replace .nrrd with .nii.gz
+    dst = src[:-5] + ".nii"   # replace .nrrd with .nii (uncompressed; Scalismo 0.92.x needs this)
     basename = os.path.basename(src)
     if os.path.exists(dst):
         print(f"  SKIP (already exists): {os.path.basename(dst)}")
