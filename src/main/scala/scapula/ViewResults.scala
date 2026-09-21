@@ -4,6 +4,7 @@ import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.ui.api.ScalismoUI
 
 import java.io.File
+import java.nio.file.{Files, StandardCopyOption}
 
 /**
  * Opens Stage2ReferenceRefinement's saved output (Config.outDir) in the Scalismo viewer. Kept separate from the
@@ -23,14 +24,30 @@ object ViewResults {
 
     val ui = ScalismoUI()
 
-    val modelFile = new File(dir, "scapula_gpmm.h5")
-    if (modelFile.exists()) {
-      val gpmm = StatisticalModelIO.readStatisticalTriangleMeshModel3D(modelFile).get
-      val modelGroup = ui.createGroup("final GPMM")
-      ui.show(modelGroup, gpmm, "scapula_gpmm")
-      println(s"Loaded $modelFile (rank ${gpmm.rank})")
-    } else {
-      println(s"!! $modelFile not found -- did Stage2ReferenceRefinement finish?")
+    // scalismo 0.92.1 always writes its own JSON-based format regardless of file name, but its READER dispatches
+    // purely on extension: ".h5" is parsed as real binary HDF5 (and fails on this content), ".json" is parsed
+    // correctly. Stage2ReferenceRefinement now writes "scapula_gpmm.json" directly; this also self-heals a
+    // model saved as "scapula_gpmm.h5" by an older run, by reading it through a renamed temp copy instead.
+    val jsonModelFile = new File(dir, "scapula_gpmm.json")
+    val legacyModelFile = new File(dir, "scapula_gpmm.h5")
+    val modelFileToRead =
+      if (jsonModelFile.exists()) Some(jsonModelFile)
+      else if (legacyModelFile.exists()) {
+        val tmp = Files.createTempFile("scapula_gpmm", ".json")
+        Files.copy(legacyModelFile.toPath, tmp, StandardCopyOption.REPLACE_EXISTING)
+        println(s"(found legacy $legacyModelFile -- its content is actually JSON despite the .h5 name; " +
+          s"reading it via a renamed temp copy)")
+        Some(tmp.toFile)
+      } else None
+
+    modelFileToRead match {
+      case Some(modelFile) =>
+        val gpmm = StatisticalModelIO.readStatisticalTriangleMeshModel3D(modelFile).get
+        val modelGroup = ui.createGroup("final GPMM")
+        ui.show(modelGroup, gpmm, "scapula_gpmm")
+        println(s"Loaded GPMM (rank ${gpmm.rank})")
+      case None =>
+        println(s"!! Neither $jsonModelFile nor $legacyModelFile found -- did Stage2ReferenceRefinement finish?")
     }
 
     val referenceFile = new File(dir, "reference_mean_shape.stl")

@@ -206,13 +206,18 @@ object Stage2ReferenceRefinement {
       f" and landmark RMSE by ${(1 - afterLm / beforeLm) * 100}%.1f%%")
 
     val meshOut = new File(Config.outDir, "reference_mean_shape.stl")
-    val modelOut = new File(Config.outDir, "scapula_gpmm.h5")
+    // NOTE: despite the "HDF5" name, scalismo 0.92.1's writer (HDF5Writer.write -> HDF5Json.writeToFile) always
+    // serializes to its own JSON-based format, never real binary HDF5 -- and the reader picks its parser purely
+    // by file EXTENSION (".h5" -> a real binary-HDF5 parser that then fails on this JSON content, ".json" -> the
+    // matching JSON parser). So the file this writes MUST be named ".json", not ".h5", or reading it back fails
+    // with "No valid HDF5 signature found" even though the write itself succeeded.
+    val modelOut = new File(Config.outDir, "scapula_gpmm.json")
     MeshIO.writeMesh(currentReference, meshOut).get
     StatisticalModelIO.writeStatisticalTriangleMeshModel3D(finalGpmm, modelOut).get
 
     println(s"\nAll results written to ${Config.outDir.getAbsolutePath}:")
     println("  reference_mean_shape.stl     - the final unbiased template")
-    println("  scapula_gpmm.h5              - the final GPMM (open with the ScalismoUI 'load model' button too)")
+    println("  scapula_gpmm.json            - the final GPMM (scalismo's own JSON-based model format)")
     println("  final_<subject>_target.stl   - each subject rigidly (+scale) aligned to the final reference")
     println("  final_<subject>_fit.stl      - each subject's landmark-informed non-rigid GPMM fit")
     println("  pass<N>_reference.stl        - the reference used at the start of pass N")
