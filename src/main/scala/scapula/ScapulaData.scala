@@ -96,7 +96,7 @@ object ScapulaData {
     val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
     files
       .filter(_.getName.toLowerCase.endsWith(".csv"))
-      .filter(f => f.getName.toLowerCase.contains("scapula") && f.getName.toLowerCase.contains("model_data"))
+      .filter(_.getName.toLowerCase.contains("model_data"))
       .filterNot(_.getName.toLowerCase.startsWith("single"))
       .sortBy(_.getName)
       .headOption
