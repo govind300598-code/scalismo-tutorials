@@ -52,13 +52,16 @@ object ReferenceSelection {
       else Pool(s, raw, lms, wasMirrored = false)
     }
 
-    if (Config.buildIndependentModel) {
-      specimens.groupBy(_.subject).toIndexedSeq.sortBy(_._1).flatMap { case (_, group) =>
-        group.find(!_.isRight).orElse(group.headOption).map(toPool)
+    val full =
+      if (Config.buildIndependentModel) {
+        specimens.groupBy(_.subject).toIndexedSeq.sortBy(_._1).flatMap { case (_, group) =>
+          group.find(!_.isRight).orElse(group.headOption).map(toPool)
+        }
+      } else {
+        specimens.sortBy(_.modelId).map(toPool)
       }
-    } else {
-      specimens.sortBy(_.modelId).map(toPool)
-    }
+
+    if (Config.subjectLimit > 0) full.take(Config.subjectLimit) else full
   }
 
   private def alignedDistance(moving: Pool, fixed: Pool)(implicit rng: Random): Metrics.SurfaceStats = {
@@ -78,7 +81,7 @@ object ReferenceSelection {
 
   /** Ranks every pool member by mean distance to everyone else and returns the medoid (rank #1). */
   def medoid(pool: IndexedSeq[Pool], matrix: IndexedSeq[Pairwise]): (Pool, IndexedSeq[Ranked]) = {
-    require(pool.size >= 3, s"Need at least 3 subjects to pick a medoid reference, found ${pool.size}")
+    require(pool.size >= 2, s"Need at least 2 subjects to pick a medoid reference, found ${pool.size}")
     val byA = matrix.groupBy(_.a)
 
     val ranked = pool.map { a =>

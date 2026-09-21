@@ -55,6 +55,9 @@ object Config {
    * named anatomical correspondences instead of being drowned out.
    */
   val landmarkWeight: Double = env("SCAPULA_LANDMARK_WEIGHT", "10.0").toDouble
+
+  /** Cap the pool to the first N subjects (after sorting), for a fast smoke-test run. -1 = use everyone. */
+  val subjectLimit: Int = env("SCAPULA_SUBJECT_LIMIT", "-1").toInt
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

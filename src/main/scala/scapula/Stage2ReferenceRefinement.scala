@@ -64,8 +64,9 @@ object Stage2ReferenceRefinement {
 
     val pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
-      s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left)\n")
-    require(pool.size >= 3, s"Need at least 3 subjects, found ${pool.size}. Check SCAPULA_DATA_DIR.")
+      s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +
+      s"${if (Config.subjectLimit > 0) s", capped to SCAPULA_SUBJECT_LIMIT=${Config.subjectLimit}" else ""})\n")
+    require(pool.size >= 2, s"Need at least 2 subjects, found ${pool.size}. Check SCAPULA_DATA_DIR / SCAPULA_SUBJECT_LIMIT.")
 
     println("[Step 1] Bootstrap reference: medoid of the pool (pairwise similarity+ICP rigid-alignment distance matrix)")
     val (bootstrap, ranking, pairwiseMatrix) = ReferenceSelection.chooseReference(dir, Config.modelResolution)
