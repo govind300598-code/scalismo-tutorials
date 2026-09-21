@@ -13,11 +13,13 @@ libraryDependencies ++= Seq(
   "org.scalanlp" %% "breeze" % "2.1.0"
 )
 
-// 20g assumed more free RAM than the dev machine actually has once the desktop, VS
-// Code, and other apps are running -- it drove the whole system into swap (8/8 GiB
-// used) instead of failing cleanly. 12g fits a 30 GiB machine with real headroom.
+// 20g drove the whole system into swap when other apps (VS Code, Metals, Bloop)
+// were competing for RAM. 12g then wasn't enough for Stage 1, which holds every
+// specimen's full mesh in memory at once -- including the largest single specimen,
+// a 577,928-vertex mesh, that specifically needs the extra headroom. 16g is the
+// middle ground, assuming no other heavy apps are running alongside it.
 // ExitOnOutOfMemoryError means a genuine heap exhaustion kills the JVM immediately
 // with a clear error instead of the process (and the OS) thrashing indefinitely.
-run / javaOptions ++= Seq("-Xmx12g", "-XX:+ExitOnOutOfMemoryError")
+run / javaOptions ++= Seq("-Xmx16g", "-XX:+ExitOnOutOfMemoryError")
 run / fork := true
 run / connectInput := true
