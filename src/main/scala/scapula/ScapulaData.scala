@@ -140,6 +140,9 @@ object ScapulaData {
     else (fallbackStartIdx.map { case (lm, i) => lm -> (i, i + 1, i + 2) }, false)
   }
 
+  /** None for a missing/non-numeric cell (e.g. "NA", blank) instead of throwing, so one bad row doesn't crash the whole load. */
+  private def parseCoord(raw: String): Option[Double] = raw.trim.toDoubleOption
+
   def readLandmarkCsv(file: File): (Map[String, IndexedSeq[Landmark[_3D]]], Boolean, IndexedSeq[String]) = {
     val lines = Using.resource(Source.fromFile(file))(_.getLines().toIndexedSeq)
     require(lines.nonEmpty, s"Landmark CSV ${file.getName} is empty")
@@ -147,19 +150,34 @@ object ScapulaData {
     val header = lines.head.split(",", -1).toIndexedSeq.map(_.trim)
     val (cols, fromHeader) = resolveColumns(header)
 
-    val entries = lines.tail.filter(_.trim.nonEmpty).map { line =>
+    val skipped = scala.collection.mutable.ArrayBuffer.empty[(String, String)]
+
+    val entries = lines.tail.filter(_.trim.nonEmpty).flatMap { line =>
       val c = line.split(",", -1)
       val modelId = c(0).trim
-      val lms = landmarkNames.map { nm =>
+      val lms = landmarkNames.flatMap { nm =>
         val (xi, yi, zi) = cols(nm)
-        require(
-          c.length > math.max(xi, math.max(yi, zi)),
-          s"Row '$modelId' has ${c.length} columns but landmark $nm needs column ${math.max(xi, math.max(yi, zi))}"
-        )
-        Landmark(nm, Point3D(c(xi).trim.toDouble, c(yi).trim.toDouble, c(zi).trim.toDouble))
+        if (c.length <= math.max(xi, math.max(yi, zi))) {
+          skipped += (modelId -> s"$nm: row only has ${c.length} columns")
+          None
+        } else {
+          (parseCoord(c(xi)), parseCoord(c(yi)), parseCoord(c(zi))) match {
+            case (Some(x), Some(y), Some(z)) => Some(Landmark(nm, Point3D(x, y, z)))
+            case _ =>
+              skipped += (modelId -> s"$nm: non-numeric value ('${c(xi)}', '${c(yi)}', '${c(zi)}')")
+              None
+          }
+        }
       }
-      modelId -> lms
+      if (lms.size == landmarkNames.size) Some(modelId -> lms) else None
     }.toMap
+
+    if (skipped.nonEmpty) {
+      println(s"  [ScapulaData] skipped ${skipped.map(_._1).distinct.size} subject(s) with missing/non-numeric landmarks in ${file.getName}:")
+      skipped.groupBy(_._1).foreach { case (id, reasons) =>
+        println(s"    $id: ${reasons.map(_._2).mkString("; ")}")
+      }
+    }
 
     (entries, fromHeader, header)
   }
