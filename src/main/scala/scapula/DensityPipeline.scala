@@ -3,6 +3,8 @@ package scapula
 import scalismo.geometry.*
 import scalismo.image.DiscreteImage
 import scalismo.mesh.TriangleMesh
+import scalismo.common.ScalarMeshField3D
+import scalismo.io.MeshIO
 import scalismo.utils.Random
 
 import java.io.File
@@ -202,6 +204,14 @@ object DensityPipeline {
       }
     } finally mw.close()
     println(s"  Mean HU mesh:        ${meanCsv.getAbsolutePath}")
+
+    // Same data as a real VTK scalar mesh field (geometry + per-vertex mean HU in one
+    // file) so it opens directly in ParaView or ViewResults with correct topology and
+    // coloring -- the CSV above has no triangle connectivity, so tools have to rebuild
+    // the surface themselves (TableToPoints + Delaunay3D) instead of just opening it.
+    val meanVtk = new File(densityOutDir, "reference_mesh_meanHU.vtk")
+    MeshIO.writeScalarMeshField(ScalarMeshField3D(refMesh, model.meanHU.toArray.toIndexedSeq), meanVtk)
+    println(s"  Mean HU VTK mesh:    ${meanVtk.getAbsolutePath}")
 
     model
   }
