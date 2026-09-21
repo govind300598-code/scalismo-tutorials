@@ -43,11 +43,25 @@ object ViewResults {
     modelFileToRead match {
       case Some(modelFile) =>
         val gpmm = StatisticalModelIO.readStatisticalTriangleMeshModel3D(modelFile).get
-        val modelGroup = ui.createGroup("final GPMM")
+        val modelGroup = ui.createGroup("analytic GPMM (registration prior, NOT population-trained)")
         ui.show(modelGroup, gpmm, "scapula_gpmm")
-        println(s"Loaded GPMM (rank ${gpmm.rank})")
+        println(s"Loaded analytic GPMM (rank ${gpmm.rank}) -- its 'Random' samples reflect the hand-picked " +
+          "kernel, not real anatomy")
       case None =>
         println(s"!! Neither $jsonModelFile nor $legacyModelFile found -- did Stage2ReferenceRefinement finish?")
+    }
+
+    // The actual, data-driven statistical shape model (Stage3PCAModel), if it's been built. Comparing its
+    // "Random" samples against the analytic GPMM above is the direct visual answer to "why do samples look wrong".
+    val pcaModelFile = new File(dir, "scapula_pca_model.json")
+    if (pcaModelFile.exists()) {
+      val pcaModel = StatisticalModelIO.readStatisticalTriangleMeshModel3D(pcaModelFile).get
+      val pcaGroup = ui.createGroup("PCA model (data-driven, real SSM)")
+      ui.show(pcaGroup, pcaModel, "scapula_pca_model")
+      println(s"Loaded PCA model (rank ${pcaModel.rank}) -- its 'Random' samples are drawn from the actual " +
+        "population's learned variation")
+    } else {
+      println(s"(no $pcaModelFile yet -- run `sbt \"runMain scapula.Stage3PCAModel\"` to build the real SSM)")
     }
 
     val referenceFile = new File(dir, "reference_mean_shape.stl")
