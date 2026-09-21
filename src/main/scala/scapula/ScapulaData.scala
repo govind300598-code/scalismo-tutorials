@@ -58,6 +58,17 @@ object Config {
 
   /** Cap the pool to the first N subjects (after sorting), for a fast smoke-test run. -1 = use everyone. */
   val subjectLimit: Int = env("SCAPULA_SUBJECT_LIMIT", "-1").toInt
+
+  /**
+   * If set, fit only the K subjects ranked most "average" (smallest mean pairwise distance -- see
+   * ReferenceSelection.medoid), instead of everyone. The medoid ranking itself is still computed over the WHOLE
+   * pool (dropping subjects first would bias which one looks "average"); only the expensive non-rigid fitting
+   * loop is restricted afterward. A smaller, more homogeneous population is mechanically easier to fit tightly
+   * (see the SCAPULA_SUBJECT_LIMIT=2 run: 0.54mm mean vs. 0.85mm for all 11) -- this is NOT automatically a
+   * "better" model, just a tighter fit to fewer, more similar people; say so plainly if you report the number.
+   * -1 = disabled (use the full pool, or SCAPULA_SUBJECT_LIMIT's first-N subset).
+   */
+  val topKMostAverage: Int = env("SCAPULA_TOP_K", "-1").toInt
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

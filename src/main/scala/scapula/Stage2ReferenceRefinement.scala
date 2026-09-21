@@ -62,7 +62,7 @@ object Stage2ReferenceRefinement {
       s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
-    val pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
+    var pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +
       s"${if (Config.subjectLimit > 0) s", capped to SCAPULA_SUBJECT_LIMIT=${Config.subjectLimit}" else ""})\n")
@@ -84,6 +84,17 @@ object Stage2ReferenceRefinement {
     println("\nFull ranking (most to least 'average'):")
     ranking.zipWithIndex.foreach { case (r, i) =>
       println(f"    ${i + 1}%2d. ${r.specimen.modelId}%-24s mean-to-others=${r.meanDistanceToOthers}%6.2f mm")
+    }
+
+    // Restrict FITTING to the K most representative subjects, if asked -- the ranking above was still computed
+    // over the whole pool (dropping subjects first would bias which one looks "average"). A smaller, more
+    // homogeneous population fits tighter mechanically, not because the model got better -- report it as such.
+    if (Config.topKMostAverage > 0) {
+      val topIds = ranking.take(Config.topKMostAverage).map(_.specimen.modelId).toSet
+      pool = pool.filter(p => topIds.contains(p.specimen.modelId))
+      require(pool.size >= 2, s"SCAPULA_TOP_K=${Config.topKMostAverage} left only ${pool.size} subjects, need at least 2.")
+      println(s"\nSCAPULA_TOP_K=${Config.topKMostAverage}: fitting only the most representative subjects: " +
+        s"${pool.map(_.specimen.modelId).mkString(", ")}")
     }
 
     var currentReference: TriangleMesh3D = bootstrap.mesh
