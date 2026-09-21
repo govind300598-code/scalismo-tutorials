@@ -12,6 +12,10 @@
 # subject_limit is optional: leave it off for a real run over the whole folder; pass a small number (e.g. 4) for
 # a fast smoke test that exercises every stage end-to-end without waiting on the full population.
 #
+# To pool SEVERAL dataset folders into one combined population instead of a single <data_dir>, export
+# SCAPULA_DATA_DIRS (":"-separated) yourself before calling this script -- it takes priority over <data_dir>,
+# which you can then set to any one of those folders (informational only in that case). See README.md.
+#
 # Examples:
 #   # fast smoke test on the smallest folder, 4 subjects, default kernel
 #   scripts/run_pipeline.sh "$HOME/Documents/100 plus scapula data/paired_scapulae_STLs" \
@@ -21,6 +25,11 @@
 #   # real run, full folder, sigma=75mm s=150mm
 #   scripts/run_pipeline.sh "$HOME/Documents/100 plus scapula data/paired_shoulder_STLs_scapula" \
 #                            "$HOME/Documents/100 plus scapula data/scapula_single_gaussian_kernel_out" 75 150
+#
+#   # combined pool across all three folders
+#   export SCAPULA_DATA_DIRS="$HOME/Documents/100 plus scapula data/hill_sachs_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_shoulder_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_scapulae_STLs"
+#   scripts/run_pipeline.sh "$HOME/Documents/100 plus scapula data/paired_scapulae_STLs" \
+#                            "$HOME/Documents/100 plus scapula data/scapula_single_gaussian_kernel_out_combined" 100 100
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -44,7 +53,12 @@ fi
 
 echo "=================================================================================================="
 echo "Single-Gaussian-kernel pipeline -- full run"
-echo "  data dir        : $SCAPULA_DATA_DIR"
+if [ -n "${SCAPULA_DATA_DIRS:-}" ]; then
+  echo "  data dirs (combined, SCAPULA_DATA_DIRS takes priority over <data_dir>):"
+  echo "    ${SCAPULA_DATA_DIRS//:/$'\n    '}"
+else
+  echo "  data dir        : $SCAPULA_DATA_DIR"
+fi
 echo "  out dir         : $SCAPULA_OUT_DIR"
 echo "  sigma / s (mm)  : $SCAPULA_SK_SIGMA_MM / $SCAPULA_SK_SCALE_MM"
 echo "  subject limit   : ${SCAPULA_SUBJECT_LIMIT:-<none -- full population>}"

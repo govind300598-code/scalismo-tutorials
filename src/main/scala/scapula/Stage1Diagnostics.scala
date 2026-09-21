@@ -21,7 +21,18 @@ object Stage1Diagnostics {
     scalismo.initialize()
     implicit val rng: Random = Random(Config.seed)
 
-    val dir = Config.dataDir
+    val dirs = Config.dataDirs
+    if (dirs.size > 1)
+      println(s"${dirs.size} data directories configured (SCAPULA_DATA_DIRS) -- running full diagnostics on EACH " +
+        "one separately below (within/between-subject comparisons don't cross directories here, so a per-directory " +
+        "run stays a like-for-like check of that directory's own mirroring/landmarks/rigid alignment).\n")
+    dirs.foreach(runDiagnostics)
+  }
+
+  private def runDiagnostics(dir: java.io.File)(implicit rng: Random): Unit = {
+    println("#" * 100)
+    println(s"# ${dir.getAbsolutePath}")
+    println("#" * 100)
     val csv = ScapulaData.csvFile(dir)
     println(s"Data directory : ${dir.getAbsolutePath}")
     println(s"Landmark CSV   : ${csv.getAbsolutePath}")

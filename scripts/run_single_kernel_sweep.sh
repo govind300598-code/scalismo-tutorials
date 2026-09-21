@@ -11,6 +11,9 @@
 # Usage:
 #   SCAPULA_DATA_DIR=/path/to/paired_scapulae_STLs scripts/run_single_kernel_sweep.sh [base_out_dir]
 #
+# To pool SEVERAL dataset folders into one combined population instead, export SCAPULA_DATA_DIRS
+# (":"-separated) instead of SCAPULA_DATA_DIR -- it takes priority. See README.md.
+#
 # All the other shared pipeline knobs (SCAPULA_MODEL_RES, SCAPULA_ICP_ITERS, SCAPULA_REFINE_PASSES,
 # SCAPULA_GP_TOL, SCAPULA_GP_MAX_RANK, SCAPULA_INDEPENDENT_MODEL, SCAPULA_SEED, SCAPULA_LANDMARK_WEIGHT,
 # SCAPULA_SUBJECT_LIMIT, SCAPULA_TOP_K -- see scapula.Config) are inherited from the calling shell exactly as
@@ -33,7 +36,12 @@ fi
 GRID="${SCAPULA_SK_GRID:-50:100 50:200 75:100 75:200 100:100 100:150 100:200 150:100 150:200}"
 
 echo "Single-Gaussian-kernel sweep"
-echo "  data dir : ${SCAPULA_DATA_DIR:-<scapula.Config default>}"
+if [ -n "${SCAPULA_DATA_DIRS:-}" ]; then
+  echo "  data dirs (combined, SCAPULA_DATA_DIRS takes priority over SCAPULA_DATA_DIR):"
+  echo "    ${SCAPULA_DATA_DIRS//:/$'\n    '}"
+else
+  echo "  data dir : ${SCAPULA_DATA_DIR:-<scapula.Config default>}"
+fi
 echo "  base out : $BASE_OUT"
 echo "  grid     : $GRID"
 echo

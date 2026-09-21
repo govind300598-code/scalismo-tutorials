@@ -51,9 +51,24 @@ duplicating their logic (see `scapula/singlekernel/Delegates.scala`).
 
 `SCAPULA_DATA_DIR` must point at a folder containing the STL meshes plus their landmark CSV, e.g. any of:
 
-- `.../100 plus scapula data/paired_scapulae_STLs`
-- `.../100 plus scapula data/paired_shoulder_STLs_scapula`
-- `.../100 plus scapula data/hill_sachs_STLs_scapula`
+- `.../100 plus scapula data/paired_scapulae_STLs` (22 STL files)
+- `.../100 plus scapula data/paired_shoulder_STLs_scapula` (76 STL files)
+- `.../100 plus scapula data/hill_sachs_STLs_scapula` (56 STL files)
+
+### Combining all three into one pool
+
+To pool all three folders into a single ~154-subject population instead of using just one, set
+`SCAPULA_DATA_DIRS` (plural, `:`-separated) instead of `SCAPULA_DATA_DIR` -- it takes priority whenever it's
+set. Both pipelines (`ReferenceSelection.loadPool`/`chooseReference`, and `Stage1Diagnostics`, which then runs
+its full per-directory diagnostics once for each folder in the list) read it the same way:
+
+```bash
+export SCAPULA_DATA_DIRS="$HOME/Documents/100 plus scapula data/hill_sachs_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_shoulder_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_scapulae_STLs"
+```
+
+Each folder's own landmark CSV is still resolved independently (see below), and subject ids never collide
+across folders since each dataset's own naming prefix (`hill_sachs_*`, `paired_shoulder_*`, `paired_scapula_*`)
+is already part of the id.
 
 Some of these folders (notably `paired_scapulae_STLs`) hold every OTHER dataset's `*_model_data*.csv` alongside
 their own; `ScapulaData.csvFile` picks the right one automatically by matching the directory's own name against
@@ -68,6 +83,7 @@ Shared by both pipelines (`scapula.Config`):
 | Parameter | Default | Env var |
 |---|---|---|
 | Data directory | `paired_scapulae_STLs` | `SCAPULA_DATA_DIR` |
+| Data directories (combined pool; overrides `SCAPULA_DATA_DIR` when set) | unset | `SCAPULA_DATA_DIRS` (`:`-separated) |
 | Output directory | `scapula_kernel_pipeline_out` | `SCAPULA_OUT_DIR` |
 | Model resolution (vertices) | 5000 | `SCAPULA_MODEL_RES` |
 | Rigid ICP iterations | 40 | `SCAPULA_ICP_ITERS` |
@@ -140,8 +156,13 @@ of a guess, run the full 9-point grid (lower/default/upper sigma x tight/default
 comparison:
 
 ```bash
-export SCAPULA_DATA_DIR="/path/to/100 plus scapula data/paired_scapulae_STLs"
-scripts/run_single_kernel_sweep.sh "/path/to/100 plus scapula data/single_gaussian_kernel_sweep_out"
+# single folder
+export SCAPULA_DATA_DIR="$HOME/Documents/100 plus scapula data/paired_scapulae_STLs"
+scripts/run_single_kernel_sweep.sh "$HOME/Documents/100 plus scapula data/single_gaussian_kernel_sweep_out"
+
+# OR: all three folders combined into one ~154-subject pool (SCAPULA_DATA_DIRS overrides SCAPULA_DATA_DIR)
+export SCAPULA_DATA_DIRS="$HOME/Documents/100 plus scapula data/hill_sachs_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_shoulder_STLs_scapula:$HOME/Documents/100 plus scapula data/paired_scapulae_STLs"
+scripts/run_single_kernel_sweep.sh "$HOME/Documents/100 plus scapula data/single_gaussian_kernel_sweep_out_combined"
 ```
 
 This runs Stage 2 + Stage 3 once per grid point (each its own `sbt` process, to bound memory the same way the
@@ -151,6 +172,10 @@ grid point's mean/RMS/HD95/Hausdorff/landmark-RMSE, compactness/specificity/gene
 "lowest is best" ranking. Override the grid with `SCAPULA_SK_GRID="sigma1:s1 sigma2:s2 ..."`, or run
 `scripts/compare_single_kernel_sweep.py <base_dir>` again standalone against any already-completed sweep
 directory (e.g. after adding more grid points by hand).
+
+**Combined-pool runs cost more per grid point** -- ~154 subjects with 2 refinement passes is a lot more fitting
+than 22, 56, or 76 subjects alone. Validate with the smoke test (below) before committing to a full combined
+sweep.
 
 ## Comparing the two pipelines against each other
 

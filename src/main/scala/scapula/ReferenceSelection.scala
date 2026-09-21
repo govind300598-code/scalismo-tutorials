@@ -39,26 +39,34 @@ object ReferenceSelection {
    * expressed in the LEFT-scapula frame (right-side specimens mirrored). Restricting to one side per subject by
    * default avoids a subject's near-identical left+right pair acting as two votes for the same shape, both in
    * the medoid search and in the mean-shape averaging.
+   *
+   * `dirs`: one or more dataset directories, pooled into a single population (see `Config.dataDirs`). Each
+   * directory's own landmark CSV is resolved independently before pooling, so folders with different naming
+   * conventions can be combined; subject grouping (for `buildIndependentModel`) then runs over the COMBINED
+   * list, which is safe here because every subject id already carries its own dataset's naming prefix (e.g.
+   * "hill_sachs_001" vs. "paired_scapula_002"), so there is no cross-directory collision risk.
    */
-  def loadPool(dir: File, resolution: Int): IndexedSeq[Pool] = {
-    val csv = ScapulaData.csvFile(dir)
-    val (landmarks, _, _) = ScapulaData.readLandmarkCsv(csv)
-    val specimens = ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId))
+  def loadPool(dirs: IndexedSeq[File], resolution: Int): IndexedSeq[Pool] = {
+    val specimens: IndexedSeq[(ScapulaData.Specimen, IndexedSeq[Landmark[_3D]])] = dirs.flatMap { dir =>
+      val csv = ScapulaData.csvFile(dir)
+      val (landmarks, _, _) = ScapulaData.readLandmarkCsv(csv)
+      ScapulaData.specimens(dir).filter(s => landmarks.contains(s.modelId)).map(s => s -> landmarks(s.modelId))
+    }
 
-    def toPool(s: ScapulaData.Specimen): Pool = {
+    def toPool(entry: (ScapulaData.Specimen, IndexedSeq[Landmark[_3D]])): Pool = {
+      val (s, lms) = entry
       val raw = ScapulaData.loadMesh(s.file).operations.decimate(resolution)
-      val lms = landmarks(s.modelId)
       if (s.isRight) Pool(s, ScapulaData.mirrorMesh(raw), ScapulaData.mirrorLandmarks(lms), wasMirrored = true)
       else Pool(s, raw, lms, wasMirrored = false)
     }
 
     val full =
       if (Config.buildIndependentModel) {
-        specimens.groupBy(_.subject).toIndexedSeq.sortBy(_._1).flatMap { case (_, group) =>
-          group.find(!_.isRight).orElse(group.headOption).map(toPool)
+        specimens.groupBy(_._1.subject).toIndexedSeq.sortBy(_._1).flatMap { case (_, group) =>
+          group.find(!_._1.isRight).orElse(group.headOption).map(toPool)
         }
       } else {
-        specimens.sortBy(_.modelId).map(toPool)
+        specimens.sortBy(_._1.modelId).map(toPool)
       }
 
     if (Config.subjectLimit > 0) full.take(Config.subjectLimit) else full
@@ -100,8 +108,8 @@ object ReferenceSelection {
   }
 
   /** Convenience: loads the pool, computes the full pairwise matrix, and picks the medoid in one call. */
-  def chooseReference(dir: File, resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) = {
-    val pool = loadPool(dir, resolution)
+  def chooseReference(dirs: IndexedSeq[File], resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) = {
+    val pool = loadPool(dirs, resolution)
     val matrix = pairwiseDistanceMatrix(pool)
     val (best, ranked) = medoid(pool, matrix)
     (best, ranked, matrix)

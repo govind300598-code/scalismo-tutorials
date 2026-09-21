@@ -18,6 +18,19 @@ object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs"))
+
+  /**
+   * One or more dataset directories, pooled into a single population. Set `SCAPULA_DATA_DIRS` to a
+   * `:`-separated list (e.g. "dirA:dirB:dirC") to combine several folders -- each folder's landmark CSV is
+   * still resolved independently (see `ScapulaData.csvFile`), so folders with different naming conventions
+   * (hill_sachs_*, paired_shoulder_*, paired_scapulae_*, ...) can be mixed freely; their subject ids don't
+   * collide since each dataset's own naming prefix is already part of the id. Falls back to the single
+   * `dataDir` above when `SCAPULA_DATA_DIRS` isn't set, so existing single-folder runs are unaffected.
+   */
+  val dataDirs: IndexedSeq[File] = sys.env.get("SCAPULA_DATA_DIRS").map(_.trim).filter(_.nonEmpty) match {
+    case Some(joined) => joined.split(":").toIndexedSeq.map(p => new File(p.trim))
+    case None          => IndexedSeq(dataDir)
+  }
   // Shared fallback default for BOTH the multi-kernel (scapula.*) and single-Gaussian-kernel
   // (scapula.singlekernel.*) pipelines -- always override SCAPULA_OUT_DIR explicitly per run (see README),
   // so a multi-kernel run and a single-kernel run (or several single-kernel sweep points) never collide.
