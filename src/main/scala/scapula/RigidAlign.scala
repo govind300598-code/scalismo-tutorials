@@ -57,14 +57,24 @@ object RigidAlign {
     current
   }
 
-  /** Landmark Procrustes followed by trimmed rigid ICP. Returns the aligned mesh and the aligned landmarks. */
+  /**
+   * Landmark Procrustes followed by trimmed rigid ICP. Returns the aligned mesh and the aligned landmarks.
+   *
+   * `useScaling`: false (default) keeps this a genuinely RIGID alignment (6 DOF; Stage1Diagnostics relies on
+   * that to isolate pose from shape). true uses a similarity (rigid + isotropic scale) landmark Procrustes for
+   * the initial step instead -- the ICP refinement afterwards is always rigid-only regardless (unconstrained
+   * scale + closest-point search is not a stable combination).
+   */
   def landmarkThenIcp(mesh: TriangleMesh[_3D],
                       lms: IndexedSeq[Landmark[_3D]],
                       targetMesh: TriangleMesh[_3D],
                       targetLms: IndexedSeq[Landmark[_3D]],
-                      icpIterations: Int = 30
+                      icpIterations: Int = 30,
+                      useScaling: Boolean = false
   )(implicit rng: Random): (TriangleMesh[_3D], IndexedSeq[Landmark[_3D]]) = {
-    val lmTrans = ScapulaData.rigidFromLandmarks(lms, targetLms)
+    val lmTrans: Point[_3D] => Point[_3D] =
+      if (useScaling) ScapulaData.similarityFromLandmarks(lms, targetLms)
+      else ScapulaData.rigidFromLandmarks(lms, targetLms)
     val preAligned = mesh.transform(lmTrans)
     val preLms = lms.map(lm => lm.copy(point = lmTrans(lm.point)))
 

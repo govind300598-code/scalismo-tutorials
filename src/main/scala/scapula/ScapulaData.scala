@@ -4,7 +4,7 @@ import scalismo.geometry.*
 import scalismo.mesh.*
 import scalismo.io.MeshIO
 import scalismo.registration.LandmarkRegistration
-import scalismo.transformations.TranslationAfterRotation
+import scalismo.transformations.{TranslationAfterRotation, TranslationAfterScalingAfterRotation}
 
 import java.io.File
 import scala.io.Source
@@ -47,6 +47,14 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  /**
+   * Relative weight of the landmark data term in non-rigid GPMM fitting, against the surface (mean-squares
+   * distance-image) term. There are only 5 landmarks against up to thousands of sampled surface points per
+   * registration stage, so they need a large per-point weight to still meaningfully pull the fit toward the
+   * named anatomical correspondences instead of being drowned out.
+   */
+  val landmarkWeight: Double = env("SCAPULA_LANDMARK_WEIGHT", "10.0").toDouble
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
@@ -186,6 +194,18 @@ object ScapulaData {
                          to: IndexedSeq[Landmark[_3D]]
   ): TranslationAfterRotation[_3D] =
     LandmarkRegistration.rigid3DLandmarkRegistration(from, to, center = Point3D(0, 0, 0))
+
+  /**
+   * Rigid + isotropic scale (similarity) Procrustes on landmarks. Unlike `rigidFromLandmarks`, this removes overall
+   * size differences too, which is the standard choice (classical Generalized Procrustes Analysis includes scale)
+   * when the point is to build a shape-only correspondence/model and different subjects' bones genuinely differ
+   * in size. Used for the GPMM pipeline (RigidAlign's `useScaling = true`); Stage1Diagnostics deliberately keeps
+   * using the rigid-only version, since its whole point is to test the POSE-only pipeline's noise floor.
+   */
+  def similarityFromLandmarks(from: IndexedSeq[Landmark[_3D]],
+                              to: IndexedSeq[Landmark[_3D]]
+  ): TranslationAfterScalingAfterRotation[_3D] =
+    LandmarkRegistration.similarity3DLandmarkRegistration(from, to, center = Point3D(0, 0, 0))
 
   def perLandmarkDistances(a: IndexedSeq[Landmark[_3D]], b: IndexedSeq[Landmark[_3D]]): IndexedSeq[(String, Double)] = {
     val bById = b.map(l => l.id -> l.point).toMap

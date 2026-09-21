@@ -1,11 +1,11 @@
 package scapula
 
 import scalismo.common.interpolation.NearestNeighborInterpolator3D
-import scalismo.geometry.{EuclideanVector, _3D}
+import scalismo.geometry.{EuclideanVector, Point, _3D}
 import scalismo.kernels.{DiagonalKernel3D, GaussianKernel3D}
 import scalismo.mesh.TriangleMesh
 import scalismo.numerics.{FixedPointsUniformMeshSampler3D, LBFGSOptimizer}
-import scalismo.registration.{GaussianProcessTransformationSpace, L2Regularizer, MeanSquaresMetric, Registration}
+import scalismo.registration.{GaussianProcessTransformationSpace, L2Regularizer, MeanSquaresMetric, Registration, RegistrationMetric}
 import scalismo.statisticalmodel.{GaussianProcess3D, LowRankGaussianProcess, PointDistributionModel, PointDistributionModel3D}
 import scalismo.utils.Random as ScalismoRandom
 
@@ -52,18 +52,29 @@ object GpmmFitting {
     (lowRankGP, PointDistributionModel3D(referenceMesh, lowRankGP))
   }
 
+  /**
+   * `landmarkCorrespondences`: optional (referencePoint, targetPoint) pairs -- when non-empty, the surface
+   * (mean-squares distance-image) term is joined with a LandmarkMetric term, weighted by `landmarkWeight`, so the
+   * non-rigid fit is pulled by the same named anatomical landmarks used for rigid pre-alignment, not just the
+   * anonymous closest-surface-point data term.
+   */
   def doRegistration(lowRankGP: LowRankGaussianProcess[_3D, EuclideanVector[_3D]],
                      referenceMesh: TriangleMesh[_3D],
                      targetMesh: TriangleMesh[_3D],
                      initialCoefficients: DenseVector[Double],
                      registrationParameters: RegistrationParameters,
-                     onIteration: DenseVector[Double] => Unit = _ => ()
+                     onIteration: DenseVector[Double] => Unit = _ => (),
+                     landmarkCorrespondences: IndexedSeq[(Point[_3D], Point[_3D])] = IndexedSeq.empty,
+                     landmarkWeight: Double = Config.landmarkWeight
   )(implicit rng: ScalismoRandom): DenseVector[Double] = {
     val transformationSpace = GaussianProcessTransformationSpace(lowRankGP)
     val fixedImage = referenceMesh.operations.toDistanceImage
     val movingImage = targetMesh.operations.toDistanceImage
     val sampler = FixedPointsUniformMeshSampler3D(referenceMesh, registrationParameters.numberOfSampledPoints)
-    val metric = MeanSquaresMetric(fixedImage, movingImage, transformationSpace, sampler)
+    val surfaceMetric = MeanSquaresMetric(fixedImage, movingImage, transformationSpace, sampler)
+    val metric: RegistrationMetric[_3D] =
+      if (landmarkCorrespondences.isEmpty) surfaceMetric
+      else SumMetric(Seq(surfaceMetric -> 1.0, LandmarkMetric(landmarkCorrespondences, transformationSpace) -> landmarkWeight))
     val optimizer = LBFGSOptimizer(registrationParameters.numberOfIterations)
     val regularizer = L2Regularizer(transformationSpace)
     val registration = Registration(metric, regularizer, registrationParameters.regularizationWeight, optimizer)
@@ -80,12 +91,15 @@ object GpmmFitting {
          referenceMesh: TriangleMesh[_3D],
          targetMesh: TriangleMesh[_3D],
          schedule: Seq[RegistrationParameters] = defaultSchedule,
-         onIteration: DenseVector[Double] => Unit = _ => ()
+         onIteration: DenseVector[Double] => Unit = _ => (),
+         landmarkCorrespondences: IndexedSeq[(Point[_3D], Point[_3D])] = IndexedSeq.empty,
+         landmarkWeight: Double = Config.landmarkWeight
   )(implicit rng: ScalismoRandom): DenseVector[Double] = {
     val initial = DenseVector.zeros[Double](lowRankGP.rank)
     schedule.foldLeft(initial) { (coefficients, params) =>
       println(s"    $params")
-      doRegistration(lowRankGP, referenceMesh, targetMesh, coefficients, params, onIteration)
+      doRegistration(lowRankGP, referenceMesh, targetMesh, coefficients, params, onIteration,
+        landmarkCorrespondences, landmarkWeight)
     }
   }
 }

@@ -62,8 +62,8 @@ object ReferenceSelection {
   }
 
   private def alignedDistance(moving: Pool, fixed: Pool)(implicit rng: Random): Metrics.SurfaceStats = {
-    val (aligned, _) =
-      RigidAlign.landmarkThenIcp(moving.mesh, moving.landmarks, fixed.mesh, fixed.landmarks, Config.icpIterations)
+    val (aligned, _) = RigidAlign.landmarkThenIcp(moving.mesh, moving.landmarks, fixed.mesh, fixed.landmarks,
+      Config.icpIterations, useScaling = true)
     Metrics.symmetric(aligned, fixed.mesh)
   }
 

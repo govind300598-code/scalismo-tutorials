@@ -1,6 +1,7 @@
 package scapula
 
-import scalismo.geometry.EuclideanVector3D
+import scalismo.common.PointId
+import scalismo.geometry.{EuclideanVector3D, Landmark, Point, _3D}
 import scalismo.io.{MeshIO, StatisticalModelIO}
 import scalismo.mesh.TriangleMesh3D
 import scalismo.utils.Random as ScalismoRandom
@@ -8,20 +9,33 @@ import scalismo.utils.Random as ScalismoRandom
 import java.io.File
 
 /**
- * STAGE 2 -- UNBIASED REFERENCE + NON-RIGID GPMM FITTING ON THE REAL DATASET.
+ * STAGE 2 -- UNBIASED REFERENCE + LANDMARK-INFORMED NON-RIGID GPMM FITTING ON THE REAL DATASET.
  *
  * "Most average shape" cannot be answered by picking a specimen and calling it done: any single real scapula is
  * still one person's anatomy. This runs the standard unbiased-template procedure instead:
  *
  *   1. Bootstrap: pick the MEDOID (see ReferenceSelection) as a good, non-outlier starting template -- better
  *      than an arbitrary specimen, but still just one real subject.
- *   2. Build a GPMM on the current template, rigidly pre-align every subject to it, then non-rigidly fit the
- *      GPMM to each (Config.refinePasses times). Because every fit shares the template's own point indices,
- *      averaging the fitted meshes point-by-point is now a valid correspondence-based mean shape -- unlike
- *      averaging raw, uncorresponded vertices, which is meaningless.
+ *   2. Build a GPMM on the current template, rigidly (+ scale) pre-align every subject to it via landmarks then
+ *      trimmed ICP, then non-rigidly fit the GPMM to each (Config.refinePasses times) -- both steps use the
+ *      named landmarks, not just anonymous closest-point correspondences (see below). Because every fit shares
+ *      the template's own point indices, averaging the fitted meshes point-by-point is now a valid
+ *      correspondence-based mean shape -- unlike averaging raw, uncorresponded vertices, which is meaningless.
  *   3. That mean becomes the next pass's template. Repeating removes the residual bias of having anchored the
  *      first pass on one real specimen (this is a Generalized-Procrustes-style iteration, done in shape space
  *      instead of point space because the specimens only have sparse landmark correspondence to start with).
+ *
+ * Where the landmarks are used:
+ *   - RIGID pre-alignment: `RigidAlign.landmarkThenIcp(..., useScaling = true)` -- landmark Procrustes WITH an
+ *     isotropic scale term (a similarity transform, not just rigid), because different subjects' scapulae
+ *     genuinely differ in size and classical Generalized Procrustes Analysis removes that before shape
+ *     comparison. Trimmed ICP then refines the pose (rigid-only: unconstrained scale plus closest-point search
+ *     is not numerically stable).
+ *   - NON-RIGID GPMM fitting: scalismo's registration metrics are all image-to-image (MeanSquaresMetric etc.),
+ *     so a plain GPMM fit has no landmark term -- only the anonymous closest-surface-point data term. This adds
+ *     one: `LandmarkMetric` (see LandmarkMetric.scala) penalizes the distance between each named landmark's
+ *     position on the deforming reference and its corresponding position on the target, added to the surface
+ *     term with weight Config.landmarkWeight.
  *
  * This is deliberately headless (no ScalismoUI window): keeping a live UI scene graph across every pass and
  * every one of the (subjects x passes) fitted meshes is what accumulates memory over a long batch run -- exactly
@@ -32,6 +46,12 @@ import java.io.File
  */
 object Stage2ReferenceRefinement {
 
+  /** Root-mean-square distance between corresponding points, in mm. */
+  private def rmse(a: IndexedSeq[Point[_3D]], b: IndexedSeq[Point[_3D]]): Double = {
+    require(a.length == b.length && a.nonEmpty)
+    math.sqrt(a.zip(b).map { case (p, q) => (p - q).norm2 }.sum / a.length)
+  }
+
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
@@ -39,7 +59,7 @@ object Stage2ReferenceRefinement {
     val dir = Config.dataDir
     println(s"Data directory  : ${dir.getAbsolutePath}")
     println(s"Model resolution: ${Config.modelResolution} vertices, refine passes: ${Config.refinePasses}, " +
-      s"rigid ICP iterations: ${Config.icpIterations}")
+      s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
     val pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
@@ -47,7 +67,7 @@ object Stage2ReferenceRefinement {
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left)\n")
     require(pool.size >= 3, s"Need at least 3 subjects, found ${pool.size}. Check SCAPULA_DATA_DIR.")
 
-    println("[Step 1] Bootstrap reference: medoid of the pool (pairwise rigid-alignment distance matrix)")
+    println("[Step 1] Bootstrap reference: medoid of the pool (pairwise similarity+ICP rigid-alignment distance matrix)")
     val (bootstrap, ranking, pairwiseMatrix) = ReferenceSelection.chooseReference(dir, Config.modelResolution)
 
     CsvWriter.write(
@@ -71,6 +91,18 @@ object Stage2ReferenceRefinement {
     // pre-alignment in every pass; ICP then refines the pose regardless of how good that start was.
     val poseLandmarks = bootstrap.landmarks
 
+    // The reference vertex closest to each named landmark, found ONCE on the bootstrap mesh. Every later pass's
+    // reference is a point-by-point mean built from THIS mesh's topology, so the same point ids stay the right
+    // landmark locations throughout -- only their coordinates move as the reference is refined.
+    val referenceLandmarkIds: Map[String, PointId] =
+      bootstrap.landmarks.map(lm => lm.id -> bootstrap.mesh.pointSet.findClosestPoint(lm.point).id).toMap
+    println(s"\nReference landmark ids (nearest vertex to each named landmark on the bootstrap mesh): " +
+      referenceLandmarkIds.map { case (name, id) => s"$name=${id.id}" }.mkString(", "))
+
+    /** (reference point id, this subject's corresponding target point) for every landmark name known on both sides. */
+    def matchLandmarks(alignedTargetLandmarks: IndexedSeq[Landmark[_3D]]): IndexedSeq[(PointId, Point[_3D])] =
+      alignedTargetLandmarks.flatMap(lm => referenceLandmarkIds.get(lm.id).map(id => (id, lm.point)))
+
     val passRows = scala.collection.mutable.ArrayBuffer.empty[Seq[Any]]
 
     for (pass <- 1 to Config.refinePasses) {
@@ -83,16 +115,25 @@ object Stage2ReferenceRefinement {
       MeshIO.writeMesh(currentReference, new File(Config.outDir, s"pass${pass}_reference.stl")).get
 
       val fitted = pool.map { subject =>
-        val (rigidlyAligned, _) =
-          RigidAlign.landmarkThenIcp(subject.mesh, subject.landmarks, currentReference, poseLandmarks, Config.icpIterations)
+        val (rigidlyAligned, alignedLandmarks) = RigidAlign.landmarkThenIcp(subject.mesh, subject.landmarks,
+          currentReference, poseLandmarks, Config.icpIterations, useScaling = true)
+        val matches = matchLandmarks(alignedLandmarks)
+        val targetLmPoints = matches.map(_._2)
+
         val beforeStats = Metrics.symmetric(rigidlyAligned, currentReference)
-        val coefficients = GpmmFitting.fit(lowRankGP, currentReference, rigidlyAligned)
+        val lmBefore = rmse(matches.map { case (id, _) => currentReference.pointSet.point(id) }, targetLmPoints)
+
+        val coefficients = GpmmFitting.fit(lowRankGP, currentReference, rigidlyAligned,
+          landmarkCorrespondences = matches.map { case (id, target) => (currentReference.pointSet.point(id), target) })
         val fittedMesh = gpmm.instance(coefficients)
         val afterStats = Metrics.symmetric(fittedMesh, rigidlyAligned)
-        println(f"    ${subject.specimen.modelId}%-24s rigid-only ${beforeStats.render}   |   fitted ${afterStats.render}")
+        val lmAfter = rmse(matches.map { case (id, _) => fittedMesh.pointSet.point(id) }, targetLmPoints)
+
+        println(f"    ${subject.specimen.modelId}%-24s rigid-only ${beforeStats.render} lm-RMSE=$lmBefore%5.2f   |   " +
+          f"fitted ${afterStats.render} lm-RMSE=$lmAfter%5.2f")
         passRows += Seq(pass, subject.specimen.modelId,
-          beforeStats.mean, beforeStats.rms, beforeStats.hd95, beforeStats.hd,
-          afterStats.mean, afterStats.rms, afterStats.hd95, afterStats.hd)
+          beforeStats.mean, beforeStats.rms, beforeStats.hd95, beforeStats.hd, lmBefore,
+          afterStats.mean, afterStats.rms, afterStats.hd95, afterStats.hd, lmAfter)
         fittedMesh
       }
 
@@ -110,8 +151,8 @@ object Stage2ReferenceRefinement {
 
     CsvWriter.write(
       new File(Config.outDir, "fit_quality_by_pass.csv"),
-      Seq("pass", "subject", "rigid_mean_mm", "rigid_rms_mm", "rigid_hd95_mm", "rigid_hd_mm",
-        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm"),
+      Seq("pass", "subject", "rigid_mean_mm", "rigid_rms_mm", "rigid_hd95_mm", "rigid_hd_mm", "rigid_landmark_rmse_mm",
+        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm", "fit_landmark_rmse_mm"),
       passRows.toSeq
     )
 
@@ -122,35 +163,47 @@ object Stage2ReferenceRefinement {
     println(f"  Final GPMM rank: ${finalGpmm.rank}, reference vertices: ${currentReference.pointSet.numberOfPoints}")
 
     val finalRows = pool.map { subject =>
-      val (rigidlyAligned, _) =
-        RigidAlign.landmarkThenIcp(subject.mesh, subject.landmarks, currentReference, poseLandmarks, Config.icpIterations)
+      val (rigidlyAligned, alignedLandmarks) = RigidAlign.landmarkThenIcp(subject.mesh, subject.landmarks,
+        currentReference, poseLandmarks, Config.icpIterations, useScaling = true)
+      val matches = matchLandmarks(alignedLandmarks)
+      val targetLmPoints = matches.map(_._2)
+
       val beforeStats = Metrics.symmetric(rigidlyAligned, currentReference)
-      val coefficients = GpmmFitting.fit(finalGP, currentReference, rigidlyAligned)
+      val lmBefore = rmse(matches.map { case (id, _) => currentReference.pointSet.point(id) }, targetLmPoints)
+
+      val coefficients = GpmmFitting.fit(finalGP, currentReference, rigidlyAligned,
+        landmarkCorrespondences = matches.map { case (id, target) => (currentReference.pointSet.point(id), target) })
       val fittedMesh = finalGpmm.instance(coefficients)
       val afterStats = Metrics.symmetric(fittedMesh, rigidlyAligned)
-      println(f"    ${subject.specimen.modelId}%-24s rigid-only ${beforeStats.render}   |   fitted ${afterStats.render}")
+      val lmAfter = rmse(matches.map { case (id, _) => fittedMesh.pointSet.point(id) }, targetLmPoints)
+
+      println(f"    ${subject.specimen.modelId}%-24s rigid-only ${beforeStats.render} lm-RMSE=$lmBefore%5.2f   |   " +
+        f"fitted ${afterStats.render} lm-RMSE=$lmAfter%5.2f")
 
       MeshIO.writeMesh(rigidlyAligned, new File(Config.outDir, s"final_${subject.specimen.modelId}_target.stl")).get
       MeshIO.writeMesh(fittedMesh, new File(Config.outDir, s"final_${subject.specimen.modelId}_fit.stl")).get
 
-      (subject.specimen.modelId, beforeStats, afterStats)
+      (subject.specimen.modelId, beforeStats, lmBefore, afterStats, lmAfter)
     }
 
     CsvWriter.write(
       new File(Config.outDir, "final_fit_quality.csv"),
-      Seq("subject", "rigid_mean_mm", "rigid_rms_mm", "rigid_hd95_mm", "rigid_hd_mm",
-        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm"),
-      finalRows.map { case (id, b, a) => Seq(id, b.mean, b.rms, b.hd95, b.hd, a.mean, a.rms, a.hd95, a.hd) }
+      Seq("subject", "rigid_mean_mm", "rigid_rms_mm", "rigid_hd95_mm", "rigid_hd_mm", "rigid_landmark_rmse_mm",
+        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm", "fit_landmark_rmse_mm"),
+      finalRows.map { case (id, b, lb, a, la) => Seq(id, b.mean, b.rms, b.hd95, b.hd, lb, a.mean, a.rms, a.hd95, a.hd, la) }
     )
 
     val beforeMean = finalRows.map(_._2.mean).sum / finalRows.length
-    val afterMean = finalRows.map(_._3.mean).sum / finalRows.length
+    val afterMean = finalRows.map(_._4.mean).sum / finalRows.length
     val beforeHd95 = finalRows.map(_._2.hd95).sum / finalRows.length
-    val afterHd95 = finalRows.map(_._3.hd95).sum / finalRows.length
+    val afterHd95 = finalRows.map(_._4.hd95).sum / finalRows.length
+    val beforeLm = finalRows.map(_._3).sum / finalRows.length
+    val afterLm = finalRows.map(_._5).sum / finalRows.length
     println(f"\n  Average across all ${finalRows.length} subjects:")
-    println(f"    rigid-only : mean=$beforeMean%5.2f mm  HD95=$beforeHd95%6.2f mm")
-    println(f"    fitted GPMM: mean=$afterMean%5.2f mm  HD95=$afterHd95%6.2f mm")
-    println(f"    Non-rigid fitting reduced mean surface distance by ${(1 - afterMean / beforeMean) * 100}%.1f%%")
+    println(f"    rigid-only : mean=$beforeMean%5.2f mm  HD95=$beforeHd95%6.2f mm  landmark-RMSE=$beforeLm%5.2f mm")
+    println(f"    fitted GPMM: mean=$afterMean%5.2f mm  HD95=$afterHd95%6.2f mm  landmark-RMSE=$afterLm%5.2f mm")
+    println(f"    Non-rigid fitting reduced mean surface distance by ${(1 - afterMean / beforeMean) * 100}%.1f%%" +
+      f" and landmark RMSE by ${(1 - afterLm / beforeLm) * 100}%.1f%%")
 
     val meshOut = new File(Config.outDir, "reference_mean_shape.stl")
     val modelOut = new File(Config.outDir, "scapula_gpmm.h5")
@@ -160,13 +213,13 @@ object Stage2ReferenceRefinement {
     println(s"\nAll results written to ${Config.outDir.getAbsolutePath}:")
     println("  reference_mean_shape.stl     - the final unbiased template")
     println("  scapula_gpmm.h5              - the final GPMM (open with the ScalismoUI 'load model' button too)")
-    println("  final_<subject>_target.stl   - each subject rigidly aligned to the final reference")
-    println("  final_<subject>_fit.stl      - each subject's non-rigid GPMM fit")
+    println("  final_<subject>_target.stl   - each subject rigidly (+scale) aligned to the final reference")
+    println("  final_<subject>_fit.stl      - each subject's landmark-informed non-rigid GPMM fit")
     println("  pass<N>_reference.stl        - the reference used at the start of pass N")
     println("  pairwise_distance_matrix.csv - full N x N rigid-alignment distance error matrix")
     println("  medoid_ranking.csv           - mean distance to the rest of the pool, most to least average")
-    println("  fit_quality_by_pass.csv      - rigid-only vs. fitted surface-distance error per subject, per pass")
-    println("  final_fit_quality.csv        - rigid-only vs. fitted surface-distance error, final model")
+    println("  fit_quality_by_pass.csv      - rigid-only vs. fitted surface + landmark error per subject, per pass")
+    println("  final_fit_quality.csv        - rigid-only vs. fitted surface + landmark error, final model")
     println("\nTo view everything in the Scalismo viewer, run:")
     println("  sbt \"runMain scapula.ViewResults\"")
   }
