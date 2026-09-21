@@ -62,6 +62,14 @@ object Stage2ReferenceRefinement {
       s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
+    // Clear this run's own output types before writing new ones. Without this, a later run with fewer/different
+    // subjects (e.g. a SCAPULA_SUBJECT_LIMIT smoke test) leaves earlier runs' final_<subject>_*.stl and
+    // pass<N>_reference.stl files behind, mixed in with -- and silently inconsistent with -- the new reference and
+    // GPMM, which is exactly what made ViewResults report subjects that this run never touched.
+    Option(Config.outDir.listFiles((_, name) =>
+      name.matches("final_.*\\.stl") || name.matches("pass\\d+_reference\\.stl")
+    )).foreach(_.foreach(_.delete()))
+
     val pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +
