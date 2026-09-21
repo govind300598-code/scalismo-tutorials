@@ -11,6 +11,9 @@ pkill -9 -f "DensityPipeline" 2>/dev/null
 pkill -9 -f "ViewResults" 2>/dev/null
 pkill -9 -f "sbt-args" 2>/dev/null
 pkill -9 -f "Stage2ReferenceRefinement" 2>/dev/null
+pkill -9 -f "scala.meta.metals.Main" 2>/dev/null
+pkill -9 -f "bloop.BloopServer" 2>/dev/null
+pkill -9 -f "sbt-launch.jar" 2>/dev/null
 sleep 3
 
 echo "=== Launching the pipeline ==="
