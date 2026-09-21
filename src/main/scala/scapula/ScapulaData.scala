@@ -4,7 +4,7 @@ import scalismo.geometry.*
 import scalismo.mesh.*
 import scalismo.io.MeshIO
 import scalismo.registration.LandmarkRegistration
-import scalismo.transformations.TranslationAfterRotation
+import scalismo.transformations.{TranslationAfterRotation, TranslationAfterScalingAfterRotation}
 
 import java.io.File
 import scala.io.Source
@@ -17,8 +17,8 @@ import scala.util.Using
 object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
-  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
+  val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs"))
+  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
@@ -47,6 +47,40 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  /**
+   * Relative weight of the landmark data term in non-rigid GPMM fitting, against the surface (mean-squares
+   * distance-image) term. There are only 5 landmarks against up to thousands of sampled surface points per
+   * registration stage, so they need a large per-point weight to still meaningfully pull the fit toward the
+   * named anatomical correspondences instead of being drowned out.
+   */
+  val landmarkWeight: Double = env("SCAPULA_LANDMARK_WEIGHT", "10.0").toDouble
+
+  /** Cap the pool to the first N subjects (after sorting), for a fast smoke-test run. -1 = use everyone. */
+  val subjectLimit: Int = env("SCAPULA_SUBJECT_LIMIT", "-1").toInt
+
+  /**
+   * If set, fit only the K subjects ranked most "average" (smallest mean pairwise distance -- see
+   * ReferenceSelection.medoid), instead of everyone. The medoid ranking itself is still computed over the WHOLE
+   * pool (dropping subjects first would bias which one looks "average"); only the expensive non-rigid fitting
+   * loop is restricted afterward. A smaller, more homogeneous population is mechanically easier to fit tightly --
+   * this is NOT automatically a "better" model, just a tighter fit to fewer, more similar people; say so plainly
+   * if you report the number.
+   * -1 = disabled (use the full pool, or SCAPULA_SUBJECT_LIMIT's first-N subset).
+   */
+  val topKMostAverage: Int = env("SCAPULA_TOP_K", "-1").toInt
+
+  /**
+   * Number of Gaussian terms summed into the multi-scale GPMM kernel -- see GpmmFitting.buildGpmm. Not used by the
+   * single-Gaussian-kernel pipeline (scapula.singlekernel), which always uses exactly one term (see
+   * SingleKernelConfig / SingleGaussianGpmm).
+   *   3 (default) = Dennis Madsen's FIXED mailing-list recipe: coarse + mid + fine.
+   *   2           = his ORIGINAL (pre-fix) recipe: coarse + fine only, no mid-scale term -- the exact
+   *                 ablation of what his fix added, useful for measuring whether the mid term earns its keep
+   *                 on this dataset.
+   */
+  val kernelTerms: Int = env("SCAPULA_KERNEL_TERMS", "3").toInt
+  require(kernelTerms == 2 || kernelTerms == 3, s"SCAPULA_KERNEL_TERMS must be 2 or 3, got $kernelTerms")
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
@@ -60,19 +94,37 @@ object ScapulaData {
 
   final case class Specimen(modelId: String, file: File, isRight: Boolean, subject: String)
 
+  /**
+   * Picks the landmark CSV for `dir`. Several of this lab's dataset folders (e.g. "paired_scapulae_STLs") hold
+   * every other dataset's `*_model_data*.csv` alongside their own -- a plain "contains model_data" filter would
+   * pick one arbitrarily. Candidates are narrowed to non-"single_*"-prefixed `*model_data*.csv` files (the
+   * "single_..." ones describe a different, unpaired dataset even when they otherwise match), then, if more than
+   * one remains, ranked by how many of the DIRECTORY's own name tokens each filename contains -- e.g. a directory
+   * named "paired_scapulae_STLs" prefers "paired_scapulae_model_data_v1.1.csv" over "paired_shoulder_model_data_v1.1.csv"
+   * or "paired_humeri_model_data_v1.11.csv" sitting in the same folder.
+   */
   def csvFile(dir: File): File = {
     val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
-    files
+    val candidates = files
       .filter(_.getName.toLowerCase.endsWith(".csv"))
-      .filter(f => f.getName.toLowerCase.contains("scapula") && f.getName.toLowerCase.contains("model_data"))
+      .filter(_.getName.toLowerCase.contains("model_data"))
       .filterNot(_.getName.toLowerCase.startsWith("single"))
-      .sortBy(_.getName)
-      .headOption
-      .getOrElse(
-        throw new RuntimeException(
-          s"No landmark CSV found in ${dir.getPath}. Present: ${files.map(_.getName).mkString(", ")}"
-        )
+
+    if (candidates.isEmpty)
+      throw new RuntimeException(
+        s"No landmark CSV found in ${dir.getPath}. Present: ${files.map(_.getName).mkString(", ")}"
       )
+
+    if (candidates.length == 1) candidates.head
+    else {
+      def tokens(s: String): Set[String] = s.toLowerCase.split("[^a-z0-9]+").filter(_.length > 2).toSet
+      val dirTokens = tokens(dir.getName)
+      def score(f: File): Int = dirTokens.count(tokens(f.getName))
+      val ranked = candidates.sortBy(f => (-score(f), f.getName))
+      println(s"  [ScapulaData] multiple landmark CSVs in ${dir.getPath}, picking '${ranked.head.getName}' " +
+        s"(best match to directory name) out of: ${candidates.map(_.getName).mkString(", ")}")
+      ranked.head
+    }
   }
 
   private def normaliseHeader(h: String): String = h.trim.toLowerCase.replaceAll("[^a-z0-9]", "")
@@ -108,6 +160,9 @@ object ScapulaData {
     else (fallbackStartIdx.map { case (lm, i) => lm -> (i, i + 1, i + 2) }, false)
   }
 
+  /** None for a missing/non-numeric cell (e.g. "NA", blank) instead of throwing, so one bad row doesn't crash the whole load. */
+  private def parseCoord(raw: String): Option[Double] = raw.trim.toDoubleOption
+
   def readLandmarkCsv(file: File): (Map[String, IndexedSeq[Landmark[_3D]]], Boolean, IndexedSeq[String]) = {
     val lines = Using.resource(Source.fromFile(file))(_.getLines().toIndexedSeq)
     require(lines.nonEmpty, s"Landmark CSV ${file.getName} is empty")
@@ -115,19 +170,34 @@ object ScapulaData {
     val header = lines.head.split(",", -1).toIndexedSeq.map(_.trim)
     val (cols, fromHeader) = resolveColumns(header)
 
-    val entries = lines.tail.filter(_.trim.nonEmpty).map { line =>
+    val skipped = scala.collection.mutable.ArrayBuffer.empty[(String, String)]
+
+    val entries = lines.tail.filter(_.trim.nonEmpty).flatMap { line =>
       val c = line.split(",", -1)
       val modelId = c(0).trim
-      val lms = landmarkNames.map { nm =>
+      val lms = landmarkNames.flatMap { nm =>
         val (xi, yi, zi) = cols(nm)
-        require(
-          c.length > math.max(xi, math.max(yi, zi)),
-          s"Row '$modelId' has ${c.length} columns but landmark $nm needs column ${math.max(xi, math.max(yi, zi))}"
-        )
-        Landmark(nm, Point3D(c(xi).trim.toDouble, c(yi).trim.toDouble, c(zi).trim.toDouble))
+        if (c.length <= math.max(xi, math.max(yi, zi))) {
+          skipped += (modelId -> s"$nm: row only has ${c.length} columns")
+          None
+        } else {
+          (parseCoord(c(xi)), parseCoord(c(yi)), parseCoord(c(zi))) match {
+            case (Some(x), Some(y), Some(z)) => Some(Landmark(nm, Point3D(x, y, z)))
+            case _ =>
+              skipped += (modelId -> s"$nm: non-numeric value ('${c(xi)}', '${c(yi)}', '${c(zi)}')")
+              None
+          }
+        }
       }
-      modelId -> lms
+      if (lms.size == landmarkNames.size) Some(modelId -> lms) else None
     }.toMap
+
+    if (skipped.nonEmpty) {
+      println(s"  [ScapulaData] skipped ${skipped.map(_._1).distinct.size} subject(s) with missing/non-numeric landmarks in ${file.getName}:")
+      skipped.groupBy(_._1).foreach { case (id, reasons) =>
+        println(s"    $id: ${reasons.map(_._2).mkString("; ")}")
+      }
+    }
 
     (entries, fromHeader, header)
   }
@@ -139,7 +209,10 @@ object ScapulaData {
       .sortBy(_.getName)
       .toIndexedSeq
       .map { f =>
-        val id = f.getName.stripSuffix(".stl")
+        // Some datasets (e.g. hill_sachs_STLs_scapula, paired_shoulder_STLs_scapula) suffix every STL filename
+        // with "_Scapula", which the landmark CSV's own subject-id column omits -- strip it so the STL actually
+        // matches its CSV row instead of silently matching nothing (which empties the whole pool, not just bad rows).
+        val id = f.getName.stripSuffix(".stl").replaceAll("(?i)_scapula$", "")
         Specimen(id, f, id.endsWith("_R"), subjectKey(id))
       }
   }
@@ -186,6 +259,18 @@ object ScapulaData {
                          to: IndexedSeq[Landmark[_3D]]
   ): TranslationAfterRotation[_3D] =
     LandmarkRegistration.rigid3DLandmarkRegistration(from, to, center = Point3D(0, 0, 0))
+
+  /**
+   * Rigid + isotropic scale (similarity) Procrustes on landmarks. Unlike `rigidFromLandmarks`, this removes overall
+   * size differences too, which is the standard choice (classical Generalized Procrustes Analysis includes scale)
+   * when the point is to build a shape-only correspondence/model and different subjects' bones genuinely differ
+   * in size. Used for the GPMM pipelines (RigidAlign's `useScaling = true`); Stage1Diagnostics deliberately keeps
+   * using the rigid-only version, since its whole point is to test the POSE-only pipeline's noise floor.
+   */
+  def similarityFromLandmarks(from: IndexedSeq[Landmark[_3D]],
+                              to: IndexedSeq[Landmark[_3D]]
+  ): TranslationAfterScalingAfterRotation[_3D] =
+    LandmarkRegistration.similarity3DLandmarkRegistration(from, to, center = Point3D(0, 0, 0))
 
   def perLandmarkDistances(a: IndexedSeq[Landmark[_3D]], b: IndexedSeq[Landmark[_3D]]): IndexedSeq[(String, Double)] = {
     val bById = b.map(l => l.id -> l.point).toMap
