@@ -18,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-BASE_OUT="${1:-${SCAPULA_SK_SWEEP_OUT:-$HOME/Documents/100 plus scapula data/single_kernel_sweep}}"
+BASE_OUT="${1:-${SCAPULA_SK_SWEEP_OUT:-$HOME/Documents/100 plus scapula data/single_gaussian_kernel_sweep_out}}"
 mkdir -p "$BASE_OUT"
 
 if ! command -v sbt >/dev/null 2>&1; then

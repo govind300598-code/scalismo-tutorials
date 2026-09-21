@@ -18,7 +18,10 @@ object Config {
   private def env(key: String, default: String): String = sys.env.getOrElse(key, default)
 
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/100 plus scapula data/paired_scapulae_STLs"))
-  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"))
+  // Shared fallback default for BOTH the multi-kernel (scapula.*) and single-Gaussian-kernel
+  // (scapula.singlekernel.*) pipelines -- always override SCAPULA_OUT_DIR explicitly per run (see README),
+  // so a multi-kernel run and a single-kernel run (or several single-kernel sweep points) never collide.
+  val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/100 plus scapula data/scapula_kernel_pipeline_out"))
 
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt

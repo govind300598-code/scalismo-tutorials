@@ -33,7 +33,7 @@ import java.io.File
  * everywhere) -- leave-one-out here means rebuilding a small PCA (milliseconds) and projecting, NOT redoing
  * registration, so it costs seconds, not hours.
  *
- * Writes 4 CSVs; run scripts/plot_ssm_validation.py afterwards to turn them into the standard figures.
+ * Writes 4 CSVs; run scripts/plot_scapula_ssm_validation.py afterwards to turn them into the standard figures.
  */
 object Stage3PCAModel {
 
@@ -131,7 +131,7 @@ object Stage3PCAModel {
     StatisticalModelIO.writeStatisticalTriangleMeshModel3D(pcaModel, modelOut).get
     println(s"\nWrote the real, data-driven PCA model -> ${modelOut.getAbsolutePath}")
     println("Wrote pca_compactness.csv, pca_specificity.csv, pca_generalization.csv to the same directory.")
-    println("Run `python3 scripts/plot_ssm_validation.py` to turn those into the standard SSM validation figures.")
+    println("Run `python3 scripts/plot_scapula_ssm_validation.py` to turn those into the standard SSM validation figures.")
     println("Run `sbt \"runMain scapula.ViewResults\"` to load the PCA model alongside scapula_gpmm.json and")
     println("compare their 'Random' samples directly.")
   }

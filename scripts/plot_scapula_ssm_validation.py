@@ -5,7 +5,7 @@ compactness, specificity, and generalization -- from the CSVs
 scapula.Stage3PCAModel writes to Config.outDir.
 
 Usage:
-    python3 scripts/plot_ssm_validation.py [output_dir]
+    python3 scripts/plot_scapula_ssm_validation.py [output_dir]
 
 If output_dir is omitted, uses the same default Config.outDir the Scala
 code uses (override with SCAPULA_OUT_DIR to match, if you've set that
@@ -20,7 +20,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 DEFAULT_OUT_DIR = os.path.expanduser(
-    "~/Documents/100 plus scapula data/scapula_ssm_out"
+    "~/Documents/100 plus scapula data/scapula_kernel_pipeline_out"
 )
 
 
@@ -93,7 +93,7 @@ def main():
     d = out_dir()
     if not os.path.isdir(d):
         print(f"!! {d} does not exist. Pass the output dir explicitly: "
-              f"python3 {sys.argv[0]} /path/to/scapula_ssm_out")
+              f"python3 {sys.argv[0]} /path/to/your/SCAPULA_OUT_DIR")
         sys.exit(1)
 
     jobs = [

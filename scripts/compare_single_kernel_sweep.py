@@ -4,7 +4,7 @@ Reads every sigma<S>_s<A> output directory produced by scripts/run_single_kernel
 (sigma, s) pair in the single-Gaussian-kernel selection grid) and builds one ranked comparison table
 covering both the standard distance-error metrics (final_fit_quality.csv) and the standard SSM
 validation metrics (pca_compactness.csv, pca_specificity.csv, pca_generalization.csv) -- the same two
-families of numbers scripts/compare_kernel_experiment.py already uses to compare the 2-term vs. 3-term
+families of numbers scripts/compare_multiscale_kernel_experiment.py already uses to compare the 2-term vs. 3-term
 multi-kernel pipeline, generalized here from a 2-way comparison to an N-way sweep over (sigma, s).
 
 Each subdirectory must already contain the output of running, in order, with SCAPULA_OUT_DIR set to it:

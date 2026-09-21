@@ -15,6 +15,11 @@ Both pipelines are driven by the same `scapula.Config` object (data directory, o
 resolution, ICP iterations, refinement passes, GP rank/tolerance, seed, landmark weight, subject limit, etc.),
 so a multi-kernel run and a single-kernel run can be compared on genuinely equal footing.
 
+**Naming note:** if you also have another scapula-modelling branch/checkout with its own scripts (e.g.
+`analyze_reports.py`, `plot_ssm_results.py`, a `scapula-ssm-comparison/` output folder), everything in *this*
+pipeline is deliberately named `*_kernel_*`/`scapula_*_kernel_*` so the two never collide if both are ever on
+disk or run against the same machine at once -- see the script and default-directory names below.
+
 ## Methodology (both pipelines, in order)
 
 1. **Stage 1 -- diagnostics** (`scapula.Stage1Diagnostics` / `scapula.singlekernel.Stage1Diagnostics`, same code).
@@ -63,7 +68,7 @@ Shared by both pipelines (`scapula.Config`):
 | Parameter | Default | Env var |
 |---|---|---|
 | Data directory | `paired_scapulae_STLs` | `SCAPULA_DATA_DIR` |
-| Output directory | `scapula_ssm_out` | `SCAPULA_OUT_DIR` |
+| Output directory | `scapula_kernel_pipeline_out` | `SCAPULA_OUT_DIR` |
 | Model resolution (vertices) | 5000 | `SCAPULA_MODEL_RES` |
 | Rigid ICP iterations | 40 | `SCAPULA_ICP_ITERS` |
 | GPA refinement passes | 2 | `SCAPULA_REFINE_PASSES` |
@@ -97,7 +102,7 @@ One (sigma, s) configuration:
 
 ```bash
 export SCAPULA_DATA_DIR="/path/to/100 plus scapula data/paired_scapulae_STLs"
-export SCAPULA_OUT_DIR="/path/to/100 plus scapula data/scapula_ssm_out_single"
+export SCAPULA_OUT_DIR="/path/to/100 plus scapula data/scapula_single_gaussian_kernel_out"
 export SCAPULA_SK_SIGMA_MM=100
 export SCAPULA_SK_SCALE_MM=100
 
@@ -106,7 +111,7 @@ sbt "runMain scapula.singlekernel.Stage2SingleKernelReferenceRefinement"
 sbt "runMain scapula.singlekernel.Stage3PCAModel"
 sbt "runMain scapula.singlekernel.ViewResults"                                # visual inspection
 sbt "runMain scapula.singlekernel.ErrorHeatmap"                               # per-vertex error heatmap
-python3 scripts/plot_ssm_validation.py "$SCAPULA_OUT_DIR"                     # compactness/specificity/generalization figures
+python3 scripts/plot_scapula_ssm_validation.py "$SCAPULA_OUT_DIR"             # compactness/specificity/generalization figures
 ```
 
 ### Selecting sigma and s: sweep + comparison
@@ -117,7 +122,7 @@ comparison:
 
 ```bash
 export SCAPULA_DATA_DIR="/path/to/100 plus scapula data/paired_scapulae_STLs"
-scripts/run_single_kernel_sweep.sh "/path/to/100 plus scapula data/single_kernel_sweep"
+scripts/run_single_kernel_sweep.sh "/path/to/100 plus scapula data/single_gaussian_kernel_sweep_out"
 ```
 
 This runs Stage 2 + Stage 3 once per grid point (each its own `sbt` process, to bound memory the same way the
@@ -130,7 +135,7 @@ directory (e.g. after adding more grid points by hand).
 
 ## Comparing the two pipelines against each other
 
-`scripts/compare_kernel_experiment.py <3term_out_dir> <2term_out_dir>` compares two multi-kernel runs. To compare
+`scripts/compare_multiscale_kernel_experiment.py <3term_out_dir> <2term_out_dir>` compares two multi-kernel runs. To compare
 a multi-kernel run against a single-kernel run on the same metrics, point it at both output directories the same
 way -- it only reads `run_config.txt`, `final_fit_quality.csv` and the `pca_*.csv` files, all of which both
 pipelines write in the same format.

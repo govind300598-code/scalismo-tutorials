@@ -11,7 +11,7 @@ This is the direct ablation of Dennis Madsen's mailing-list fix: his ORIGINAL po
 "did adding it actually help, on this dataset" with numbers instead of intuition.
 
 Usage:
-    python3 scripts/compare_kernel_experiment.py <3kernel_out_dir> <2kernel_out_dir> [report_path]
+    python3 scripts/compare_multiscale_kernel_experiment.py <3kernel_out_dir> <2kernel_out_dir> [report_path]
 
 Each <out_dir> must already contain the output of running, in order, on THAT SAME
 directory (set via SCAPULA_OUT_DIR):
@@ -82,7 +82,7 @@ def main():
         print(__doc__)
         sys.exit(1)
     dir3, dir2 = sys.argv[1], sys.argv[2]
-    report_path = sys.argv[3] if len(sys.argv) > 3 else "kernel_comparison.md"
+    report_path = sys.argv[3] if len(sys.argv) > 3 else "multiscale_kernel_comparison.md"
 
     cfg3, cfg2 = read_run_config(dir3), read_run_config(dir2)
     for label, cfg, expected in (("3-kernel dir", cfg3, "3"), ("2-kernel dir", cfg2, "2")):
