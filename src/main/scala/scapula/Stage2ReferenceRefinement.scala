@@ -62,14 +62,6 @@ object Stage2ReferenceRefinement {
       s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
-    // Clear this run's own output types before writing new ones. Without this, a later run with fewer/different
-    // subjects (e.g. a SCAPULA_SUBJECT_LIMIT smoke test) leaves earlier runs' final_<subject>_*.stl and
-    // pass<N>_reference.stl files behind, mixed in with -- and silently inconsistent with -- the new reference and
-    // GPMM, which is exactly what made ViewResults report subjects that this run never touched.
-    Option(Config.outDir.listFiles((_, name) =>
-      name.matches("final_.*\\.stl") || name.matches("pass\\d+_reference\\.stl")
-    )).foreach(_.foreach(_.delete()))
-
     val pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +
@@ -170,6 +162,14 @@ object Stage2ReferenceRefinement {
     println("=" * 100)
     val (finalGP, finalGpmm) = GpmmFitting.buildGpmm(currentReference)
     println(f"  Final GPMM rank: ${finalGpmm.rank}, reference vertices: ${currentReference.pointSet.numberOfPoints}")
+
+    // Only clear a PREVIOUS run's final_<subject>_*.stl output now, once every pass has actually finished --
+    // not at the start of the run. Deleting it upfront (this used to) means a run that dies partway through
+    // (e.g. OOM during the expensive per-subject fitting loop) wipes out a previous GOOD run's results for
+    // nothing, leaving ViewResults with no final_*.stl files at all even though nothing new was ever written.
+    // pass<N>_reference.stl files aren't touched here: this run already (re)wrote its own during the loop above.
+    Option(Config.outDir.listFiles((_, name) => name.matches("final_.*\\.stl")))
+      .foreach(_.foreach(_.delete()))
 
     val finalRows = pool.map { subject =>
       val (rigidlyAligned, alignedLandmarks) = RigidAlign.landmarkThenIcp(subject.mesh, subject.landmarks,
