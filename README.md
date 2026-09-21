@@ -98,7 +98,26 @@ Single-Gaussian-kernel pipeline only (`scapula.singlekernel.*`):
 
 ## Running the single-Gaussian-kernel pipeline
 
-One (sigma, s) configuration:
+### One command, one (sigma, s) configuration
+
+`scripts/run_pipeline.sh <data_dir> <out_dir> [sigma_mm] [scale_mm] [subject_limit]` runs `sbt compile` then
+Stage 1 -> Stage 2 -> Stage 3 -> validation figures in order, stopping immediately if any step fails:
+
+```bash
+# fast smoke test: smallest folder, 4 subjects, default kernel -- run this FIRST on a fresh checkout
+scripts/run_pipeline.sh \
+  "$HOME/Documents/100 plus scapula data/paired_scapulae_STLs" \
+  "$HOME/Documents/100 plus scapula data/scapula_single_gaussian_kernel_out_smoketest" \
+  100 100 4
+
+# real run: full folder, once the smoke test above looks right (omit subject_limit)
+scripts/run_pipeline.sh \
+  "$HOME/Documents/100 plus scapula data/paired_shoulder_STLs_scapula" \
+  "$HOME/Documents/100 plus scapula data/scapula_single_gaussian_kernel_out" \
+  75 150
+```
+
+### Or the same steps run by hand, one at a time
 
 ```bash
 export SCAPULA_DATA_DIR="/path/to/100 plus scapula data/paired_scapulae_STLs"
