@@ -29,17 +29,34 @@ object GpmmFitting {
   )
 
   /**
-   * Coarse + mid + fine Gaussian kernel (same recipe as the mailing-list example), approximated to a low-rank GP
-   * and capped at `maxRank` (via truncation) so a fine kernel on a dense reference cannot blow up the model size.
+   * Coarse + mid + fine Gaussian kernel, sized to the ACTUAL reference mesh instead of a hard-coded constant.
+   *
+   * `sigma` (correlation length, mm) and `scaleFactor` (amplitude, mm -- variance is scaleFactor^2) are both
+   * lengths in the mesh's own units. Dennis Madsen's original mailing-list recipe picked them as fractions of
+   * HIS mesh's ~150mm longest side (sigma = size/2, size/5, size/10; amplitude = 15, 10, 5, i.e. 10%, 6.7%, 3.3%
+   * of that size) -- but hard-coded the 150mm rather than measuring it. If `longestSideMm` is left unset, this
+   * now measures the actual `referenceMesh` bounding box and keeps those same ratios, so the kernel's scale
+   * always matches whatever mesh it's actually being built on.
+   *
+   * The RATIOS themselves are still someone's manual judgment call, not derived from data -- how much a real
+   * population of scapulae varies by, at each spatial scale, is exactly what building an empirical (PCA-based)
+   * model from the registered population would tell you instead of guessing.
    */
   def buildGpmm(referenceMesh: TriangleMesh[_3D],
-               longestSideMm: Double = 150,
+               longestSideMm: Option[Double] = None,
                relativeTolerance: Double = Config.gpRelativeTolerance,
                maxRank: Int = Config.gpMaxRank
   ): (LowRankGaussianProcess[_3D, EuclideanVector[_3D]], PointDistributionModel[_3D, TriangleMesh]) = {
-    val kernelCoarse = GaussianKernel3D(longestSideMm / 2, 15)
-    val kernelMid = GaussianKernel3D(longestSideMm / 5, 10)
-    val kernelFine = GaussianKernel3D(longestSideMm / 10, 5)
+    val box = referenceMesh.pointSet.boundingBox
+    val extent = box.oppositeCorner - box.origin
+    val measuredLongestSide = Seq(extent.x, extent.y, extent.z).max
+    val size = longestSideMm.getOrElse(measuredLongestSide)
+    println(f"  [GpmmFitting] reference bounding box: ${extent.x}%.1f x ${extent.y}%.1f x ${extent.z}%.1f mm " +
+      f"(longest axis ${measuredLongestSide}%.1f mm)${if (longestSideMm.isDefined) f" -- OVERRIDDEN to ${size}%.1f mm" else ""}")
+
+    val kernelCoarse = GaussianKernel3D(size / 2, size * 0.10)
+    val kernelMid = GaussianKernel3D(size / 5, size * 0.0667)
+    val kernelFine = GaussianKernel3D(size / 10, size * 0.0333)
     val kernel = DiagonalKernel3D(kernelCoarse + kernelMid + kernelFine, outputDim = 3)
     val gp = GaussianProcess3D[EuclideanVector[_3D]](kernel)
     val fullRankGP = LowRankGaussianProcess.approximateGPCholesky(
