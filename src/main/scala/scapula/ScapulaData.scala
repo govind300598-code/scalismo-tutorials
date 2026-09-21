@@ -69,6 +69,16 @@ object Config {
    * -1 = disabled (use the full pool, or SCAPULA_SUBJECT_LIMIT's first-N subset).
    */
   val topKMostAverage: Int = env("SCAPULA_TOP_K", "-1").toInt
+
+  /**
+   * Number of Gaussian terms summed into the GPMM kernel -- see GpmmFitting.buildGpmm.
+   *   3 (default) = Dennis Madsen's FIXED mailing-list recipe: coarse + mid + fine.
+   *   2           = his ORIGINAL (pre-fix) recipe: coarse + fine only, no mid-scale term -- the exact
+   *                 ablation of what his fix added, useful for measuring whether the mid term earns its keep
+   *                 on this dataset.
+   */
+  val kernelTerms: Int = env("SCAPULA_KERNEL_TERMS", "3").toInt
+  require(kernelTerms == 2 || kernelTerms == 3, s"SCAPULA_KERNEL_TERMS must be 2 or 3, got $kernelTerms")
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

@@ -62,6 +62,27 @@ object Stage2ReferenceRefinement {
       s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
+    // Written first so every output directory is self-documenting -- essential once you start comparing runs
+    // made with different env vars (e.g. SCAPULA_KERNEL_TERMS=2 vs 3) against each other later.
+    CsvWriter.write(
+      new File(Config.outDir, "run_config.txt"),
+      Seq("key", "value"),
+      Seq(
+        Seq("dataDir", Config.dataDir.getAbsolutePath),
+        Seq("modelResolution", Config.modelResolution),
+        Seq("icpIterations", Config.icpIterations),
+        Seq("refinePasses", Config.refinePasses),
+        Seq("gpRelativeTolerance", Config.gpRelativeTolerance),
+        Seq("gpMaxRank", Config.gpMaxRank),
+        Seq("kernelTerms", Config.kernelTerms),
+        Seq("buildIndependentModel", Config.buildIndependentModel),
+        Seq("seed", Config.seed),
+        Seq("landmarkWeight", Config.landmarkWeight),
+        Seq("subjectLimit", Config.subjectLimit),
+        Seq("topKMostAverage", Config.topKMostAverage)
+      )
+    )
+
     var pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +

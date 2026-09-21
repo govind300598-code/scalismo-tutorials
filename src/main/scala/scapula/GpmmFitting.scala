@@ -45,8 +45,10 @@ object GpmmFitting {
   def buildGpmm(referenceMesh: TriangleMesh[_3D],
                longestSideMm: Option[Double] = None,
                relativeTolerance: Double = Config.gpRelativeTolerance,
-               maxRank: Int = Config.gpMaxRank
+               maxRank: Int = Config.gpMaxRank,
+               kernelTerms: Int = Config.kernelTerms
   ): (LowRankGaussianProcess[_3D, EuclideanVector[_3D]], PointDistributionModel[_3D, TriangleMesh]) = {
+    require(kernelTerms == 2 || kernelTerms == 3, s"kernelTerms must be 2 or 3, got $kernelTerms")
     val box = referenceMesh.pointSet.boundingBox
     val extent = box.oppositeCorner - box.origin
     val measuredLongestSide = Seq(extent.x, extent.y, extent.z).max
@@ -55,9 +57,15 @@ object GpmmFitting {
       f"(longest axis ${measuredLongestSide}%.1f mm)${if (longestSideMm.isDefined) f" -- OVERRIDDEN to ${size}%.1f mm" else ""}")
 
     val kernelCoarse = GaussianKernel3D(size / 2, size * 0.10)
-    val kernelMid = GaussianKernel3D(size / 5, size * 0.0667)
     val kernelFine = GaussianKernel3D(size / 10, size * 0.0333)
-    val kernel = DiagonalKernel3D(kernelCoarse + kernelMid + kernelFine, outputDim = 3)
+    val kernelSum = if (kernelTerms == 3) {
+      val kernelMid = GaussianKernel3D(size / 5, size * 0.0667)
+      kernelCoarse + kernelMid + kernelFine
+    } else {
+      kernelCoarse + kernelFine
+    }
+    println(s"  [GpmmFitting] kernel: $kernelTerms-term (${if (kernelTerms == 3) "coarse+mid+fine" else "coarse+fine, NO mid term"})")
+    val kernel = DiagonalKernel3D(kernelSum, outputDim = 3)
     val gp = GaussianProcess3D[EuclideanVector[_3D]](kernel)
     val fullRankGP = LowRankGaussianProcess.approximateGPCholesky(
       referenceMesh,
