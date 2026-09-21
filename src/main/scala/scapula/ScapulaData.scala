@@ -189,7 +189,10 @@ object ScapulaData {
       .sortBy(_.getName)
       .toIndexedSeq
       .map { f =>
-        val id = f.getName.stripSuffix(".stl")
+        // Some datasets (e.g. paired_shoulder_*, hill_sachs_*) suffix every STL filename with "_Scapula",
+        // which the landmark CSV's own subject-id column omits -- strip it so the STL actually matches its
+        // CSV row instead of silently matching nothing (which empties the whole pool, not just bad rows).
+        val id = f.getName.stripSuffix(".stl").replaceAll("(?i)_scapula$", "")
         Specimen(id, f, id.endsWith("_R"), subjectKey(id))
       }
   }
