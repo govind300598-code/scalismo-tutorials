@@ -46,6 +46,14 @@ object Config {
 
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
+  /**
+   * Hard cap on vertices per specimen for the density pipeline, enforced via VTK
+   * decimation right after loading. The dataset has a handful of specimens up to
+   * 577,928 vertices; left uncapped, those alone drove repeated OOM crashes since
+   * every later stage (alignment, topology transfer, PCA) scales with mesh size.
+   */
+  val densityMaxVertices: Int = env("SCAPULA_DENSITY_MAX_VERTICES", "20000").toInt
+
   val seed: Long = env("SCAPULA_SEED", "42").toLong
 }
 

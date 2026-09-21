@@ -82,8 +82,13 @@ object DensityPipeline {
       val results = specsForVol.map { spec =>
         globalIdx += 1
         println(s"  [$globalIdx/${specimens.length}] ${spec.id}")
-        val mesh = NrrdData.extractSurface(spec)
-        println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices")
+        val rawMesh = NrrdData.extractSurface(spec)
+        val mesh = MeshDecimation.capVertices(rawMesh, Config.densityMaxVertices)
+        val decimatedNote =
+          if (mesh.pointSet.numberOfPoints != rawMesh.pointSet.numberOfPoints)
+            s" (decimated from ${rawMesh.pointSet.numberOfPoints})"
+          else ""
+        println(f"    surface: ${mesh.pointSet.numberOfPoints} vertices$decimatedNote%s")
         val hu = NrrdData.sampleHU(mesh, volume)
         val (minHU, maxHU, meanHU) = NrrdData.huStats(hu)
         val cFrac = NrrdData.corticalMask(hu).count(identity).toDouble / hu.length
