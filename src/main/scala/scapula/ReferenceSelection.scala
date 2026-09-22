@@ -5,6 +5,8 @@ import scalismo.mesh.TriangleMesh
 import scalismo.utils.Random
 
 import java.io.File
+import scala.io.Source
+import scala.util.Using
 
 /**
  * Picks the specimen to use as the non-rigid registration TEMPLATE.
@@ -113,5 +115,42 @@ object ReferenceSelection {
     val matrix = pairwiseDistanceMatrix(pool)
     val (best, ranked) = medoid(pool, matrix)
     (best, ranked, matrix)
+  }
+
+  /**
+   * Reuses a medoid/bootstrap choice already written (as `medoid_ranking.csv`) by a PRIOR run against the
+   * exact same pool -- e.g. every grid point of a kernel-selection sweep shares the identical bootstrap step,
+   * since which subject is the medoid (and the whole ranking) only depends on rigid+scale alignment, never on
+   * the GPMM kernel being swept. Skips the expensive O(n^2) pairwise-alignment search (`pairwiseDistanceMatrix`
+   * + `medoid`) entirely when this succeeds -- for a ~154-subject combined pool that search is the single most
+   * expensive fixed step, so avoiding N redundant copies of it across an N-point sweep matters a lot.
+   *
+   * `cacheDir` must be another run's `SCAPULA_OUT_DIR`. Returns None (caller MUST fall back to a fresh
+   * `pairwiseDistanceMatrix`/`medoid` computation) if `medoid_ranking.csv` is missing, empty, or any subject it
+   * names isn't found in the freshly-loaded `pool` -- i.e. this can only skip work it can PROVE is still valid
+   * for this exact pool (same directories, resolution, seed, subject filters), never silently produce a wrong
+   * answer for a pool that has actually changed.
+   */
+  def cachedMedoid(pool: IndexedSeq[Pool], cacheDir: File): Option[(Pool, IndexedSeq[Ranked])] = {
+    val rankingFile = new File(cacheDir, "medoid_ranking.csv")
+    if (!rankingFile.exists()) None
+    else {
+      val byId = pool.map(p => p.specimen.modelId -> p).toMap
+      val lines = Using.resource(Source.fromFile(rankingFile))(_.getLines().toIndexedSeq)
+      val rows = lines.drop(1).filter(_.trim.nonEmpty).map(_.split(",", -1))
+
+      val ranked = rows.flatMap { c =>
+        if (c.length < 4) None
+        else
+          for {
+            p       <- byId.get(c(1))
+            meanD   <- c(2).toDoubleOption
+            worstHd <- c(3).toDoubleOption
+          } yield Ranked(p.specimen, meanD, worstHd)
+      }
+
+      if (rows.isEmpty || ranked.length != pool.length || ranked.length != rows.length) None
+      else byId.get(rows.head(1)).map(best => (best, ranked))
+    }
   }
 }

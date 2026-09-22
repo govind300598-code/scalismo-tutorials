@@ -35,6 +35,16 @@ fi
 # Override by setting SCAPULA_SK_GRID to a space-separated "sigma:s" list before calling this script.
 GRID="${SCAPULA_SK_GRID:-50:100 50:200 75:100 75:200 100:100 100:150 100:200 150:100 150:200}"
 
+# The medoid/bootstrap reference (Stage 2's "[Step 1]") depends only on rigid+scale alignment between
+# subjects, never on the GPMM kernel -- so it is IDENTICAL across every grid point here. Point every point at
+# the FIRST point's own output dir as a cache (scapula.singlekernel.Stage2SingleKernelReferenceRefinement
+# reads SCAPULA_SK_BOOTSTRAP_CACHE): the first point computes it fresh and writes it as normal, every other
+# point then reuses it instead of repeating the expensive O(n^2) pairwise-alignment search from scratch. Safe
+# even for the first point itself (the cache file doesn't exist yet, so it just falls through to a fresh
+# computation, same as before this existed).
+FIRST_PAIR="${GRID%% *}"
+export SCAPULA_SK_BOOTSTRAP_CACHE="$BASE_OUT/sigma${FIRST_PAIR%%:*}_s${FIRST_PAIR##*:}"
+
 echo "Single-Gaussian-kernel sweep"
 if [ -n "${SCAPULA_DATA_DIRS:-}" ]; then
   echo "  data dirs (combined, SCAPULA_DATA_DIRS takes priority over SCAPULA_DATA_DIR):"
@@ -44,6 +54,7 @@ else
 fi
 echo "  base out : $BASE_OUT"
 echo "  grid     : $GRID"
+echo "  bootstrap cache: $SCAPULA_SK_BOOTSTRAP_CACHE (computed fresh by the first grid point, reused by the rest)"
 echo
 
 for pair in $GRID; do

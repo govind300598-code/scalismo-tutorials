@@ -173,6 +173,14 @@ grid point's mean/RMS/HD95/Hausdorff/landmark-RMSE, compactness/specificity/gene
 `scripts/compare_single_kernel_sweep.py <base_dir>` again standalone against any already-completed sweep
 directory (e.g. after adding more grid points by hand).
 
+**Bootstrap caching:** the medoid/bootstrap reference (Stage 2's `[Step 1]`) depends only on rigid+scale
+alignment between subjects, never on the kernel -- it's identical across all 9 grid points. The sweep script
+sets `SCAPULA_SK_BOOTSTRAP_CACHE` automatically so only the *first* grid point pays for the O(n^2)
+pairwise-alignment search; every other point reuses it. This matters most on the combined pool, where that
+search is by far the single most expensive fixed step. It's a strict, provably-safe cache: any run whose pool
+doesn't exactly match what the cache was built from (different data dirs, subject filters, etc.) silently falls
+back to computing it fresh instead of reusing something invalid.
+
 **Combined-pool runs cost more per grid point** -- ~154 subjects with 2 refinement passes is a lot more fitting
 than 22, 56, or 76 subjects alone. Validate with the smoke test (below) before committing to a full combined
 sweep.

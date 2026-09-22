@@ -82,13 +82,31 @@ object Stage2SingleKernelReferenceRefinement {
     require(pool.size >= 2, s"Need at least 2 subjects, found ${pool.size}. Check SCAPULA_DATA_DIR(S) / SCAPULA_SUBJECT_LIMIT.")
 
     println("[Step 1] Bootstrap reference: medoid of the pool (pairwise similarity+ICP rigid-alignment distance matrix)")
-    val (bootstrap, ranking, pairwiseMatrix) = ReferenceSelection.chooseReference(dirs, Config.modelResolution)
-
-    CsvWriter.write(
-      new File(Config.outDir, "pairwise_distance_matrix.csv"),
-      Seq("subject_a", "subject_b", "mean_mm", "rms_mm", "hd95_mm", "hd_mm"),
-      pairwiseMatrix.map(p => Seq(p.a, p.b, p.stats.mean, p.stats.rms, p.stats.hd95, p.stats.hd))
-    )
+    // The bootstrap/medoid choice depends only on rigid+scale alignment between subjects, never on the GPMM
+    // kernel -- so it is IDENTICAL across every (sigma, s) grid point of a kernel-selection sweep. If
+    // SCAPULA_SK_BOOTSTRAP_CACHE points at another run's output directory that already computed it for this
+    // exact pool, reuse it and skip the expensive O(n^2) pairwise-alignment search entirely; otherwise (unset,
+    // missing, or the pool doesn't match) compute it fresh, exactly as before.
+    val bootstrapCacheDir = sys.env.get("SCAPULA_SK_BOOTSTRAP_CACHE").map(new File(_))
+    val (bootstrap, ranking) = bootstrapCacheDir.flatMap(ReferenceSelection.cachedMedoid(pool, _)) match {
+      case Some((best, ranked)) =>
+        println(s"  Reusing cached bootstrap/medoid from ${bootstrapCacheDir.get.getAbsolutePath} " +
+          "(identical pool -- skips the O(n^2) pairwise-alignment search)")
+        val cachedPairwiseCsv = new File(bootstrapCacheDir.get, "pairwise_distance_matrix.csv")
+        if (cachedPairwiseCsv.exists())
+          java.nio.file.Files.copy(cachedPairwiseCsv.toPath, new File(Config.outDir, "pairwise_distance_matrix.csv").toPath,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        (best, ranked)
+      case None =>
+        val matrix = ReferenceSelection.pairwiseDistanceMatrix(pool)
+        val (best, ranked) = ReferenceSelection.medoid(pool, matrix)
+        CsvWriter.write(
+          new File(Config.outDir, "pairwise_distance_matrix.csv"),
+          Seq("subject_a", "subject_b", "mean_mm", "rms_mm", "hd95_mm", "hd_mm"),
+          matrix.map(p => Seq(p.a, p.b, p.stats.mean, p.stats.rms, p.stats.hd95, p.stats.hd))
+        )
+        (best, ranked)
+    }
     CsvWriter.write(
       new File(Config.outDir, "medoid_ranking.csv"),
       Seq("rank", "subject", "mean_distance_to_others_mm", "worst_pair_hd_mm"),
