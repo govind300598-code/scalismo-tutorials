@@ -57,8 +57,12 @@ def load_one(label, path):
         return row
 
     cfg = dict(zip(pd.read_csv(cfg_path)["key"], pd.read_csv(cfg_path)["value"].astype(str)))
-    recorded_sigma = cfg.get("kernelSigma", "unset")
-    recorded_scale = cfg.get("kernelScale", "unset")
+    # Two pipelines wrote two different key names for the same thing: this repo's own
+    # SCAPULA_KERNEL_SIGMA/SCALE override writes "kernelSigma"/"kernelScale"; the separate
+    # scapula.singlekernel pipeline (a different branch, SCAPULA_SK_SIGMA_MM/SCALE_MM) writes
+    # "sigma_mm"/"scale_mm". Accept either so this script works against output from both.
+    recorded_sigma = cfg.get("kernelSigma", cfg.get("sigma_mm", "unset"))
+    recorded_scale = cfg.get("kernelScale", cfg.get("scale_mm", "unset"))
     row["kernelSigma"], row["kernelScale"] = recorded_sigma, recorded_scale
 
     # Cross-check: does the label (what you THINK this directory is) match what the run actually
