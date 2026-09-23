@@ -113,19 +113,44 @@ object ScapulaData {
 
   final case class Specimen(modelId: String, file: File, isRight: Boolean, subject: String)
 
+  /**
+   * Picks the landmark CSV out of a directory that -- on this project's actual data layout -- holds every
+   * specimen type's CSV together (paired_scapulae_*, paired_humeri_*, hill_sachs_shoulder_*, paired_shoulder_*,
+   * single_*), not just scapulae. Alphabetical-first selection among all non-"single" *model_data*.csv candidates
+   * silently picked the wrong dataset here once already (hill_sachs_shoulder_model_data_v1.1.csv sorts before
+   * paired_scapulae_model_data_v1.1.csv) -- so this now REQUIRES "scapula" in the name when more than one
+   * candidate exists, and fails loudly on genuine ambiguity instead of guessing.
+   */
   def csvFile(dir: File): File = {
     val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
-    files
+    val candidates = files
       .filter(_.getName.toLowerCase.endsWith(".csv"))
       .filter(_.getName.toLowerCase.contains("model_data"))
       .filterNot(_.getName.toLowerCase.startsWith("single"))
       .sortBy(_.getName)
-      .headOption
-      .getOrElse(
+
+    val scapulaOnly = candidates.filter(_.getName.toLowerCase.contains("scapula"))
+
+    (candidates.length, scapulaOnly.length) match {
+      case (0, _) =>
         throw new RuntimeException(
           s"No landmark CSV found in ${dir.getPath}. Present: ${files.map(_.getName).mkString(", ")}"
         )
-      )
+      case (1, _) => candidates.head // only one candidate at all -- unambiguous regardless of name
+      case (_, 1) => scapulaOnly.head // multiple candidates, but exactly one mentions "scapula" -- use it
+      case (_, 0) =>
+        throw new RuntimeException(
+          s"Multiple landmark CSVs found in ${dir.getPath} and NONE mention 'scapula': " +
+          s"${candidates.map(_.getName).mkString(", ")}. Refusing to guess -- set SCAPULA_DATA_DIR to a " +
+          s"directory with an unambiguous scapula CSV, or rename/move the others out."
+        )
+      case (_, n) =>
+        throw new RuntimeException(
+          s"Multiple landmark CSVs found in ${dir.getPath} that ALL mention 'scapula' ($n candidates): " +
+          s"${scapulaOnly.map(_.getName).mkString(", ")}. Refusing to guess which one -- move the others out " +
+          s"of ${dir.getPath} or point SCAPULA_DATA_DIR at a directory with just one."
+        )
+    }
   }
 
   private def normaliseHeader(h: String): String = h.trim.toLowerCase.replaceAll("[^a-z0-9]", "")
