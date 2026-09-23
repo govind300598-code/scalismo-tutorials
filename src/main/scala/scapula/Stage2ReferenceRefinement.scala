@@ -75,6 +75,8 @@ object Stage2ReferenceRefinement {
         Seq("gpRelativeTolerance", Config.gpRelativeTolerance),
         Seq("gpMaxRank", Config.gpMaxRank),
         Seq("kernelTerms", Config.kernelTerms),
+        Seq("kernelSigma", Config.kernelSigma.map(_.toString).getOrElse("unset")),
+        Seq("kernelScale", Config.kernelScale.map(_.toString).getOrElse("unset")),
         Seq("buildIndependentModel", Config.buildIndependentModel),
         Seq("seed", Config.seed),
         Seq("landmarkWeight", Config.landmarkWeight),

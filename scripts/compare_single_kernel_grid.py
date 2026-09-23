@@ -50,10 +50,32 @@ def load_one(label, path):
         row[col] = df[col].mean()
 
     cfg_path = os.path.join(path, "run_config.txt")
-    if os.path.exists(cfg_path):
-        cfg = dict(zip(pd.read_csv(cfg_path)["key"], pd.read_csv(cfg_path)["value"].astype(str)))
-        row["kernelSigma"] = cfg.get("kernelSigma", "?")
-        row["kernelScale"] = cfg.get("kernelScale", "?")
+    if not os.path.exists(cfg_path):
+        print(f"!! {label}: no run_config.txt in {path} -- cannot verify this run actually used the "
+              f"kernel you think it did. Treat its numbers as unverified.")
+        row["kernelSigma"], row["kernelScale"] = "?", "?"
+        return row
+
+    cfg = dict(zip(pd.read_csv(cfg_path)["key"], pd.read_csv(cfg_path)["value"].astype(str)))
+    recorded_sigma = cfg.get("kernelSigma", "unset")
+    recorded_scale = cfg.get("kernelScale", "unset")
+    row["kernelSigma"], row["kernelScale"] = recorded_sigma, recorded_scale
+
+    # Cross-check: does the label (what you THINK this directory is) match what the run actually
+    # recorded using? Catches the exact class of bug this project has hit repeatedly -- a directory
+    # silently holding the wrong run's output.
+    if ":" in label:
+        expected_sigma, expected_scale = label.split(":", 1)
+        try:
+            mismatch = (abs(float(recorded_sigma) - float(expected_sigma)) > 1e-6 or
+                        abs(float(recorded_scale) - float(expected_scale)) > 1e-6)
+        except ValueError:
+            mismatch = True
+        if mismatch:
+            print(f"!! MISMATCH for '{label}': directory {path} actually recorded "
+                  f"kernelSigma={recorded_sigma}, kernelScale={recorded_scale} -- "
+                  f"NOT {expected_sigma}:{expected_scale} as the label claims. "
+                  f"This run's numbers belong to a different config than you think.")
     return row
 
 
