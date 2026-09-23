@@ -88,6 +88,18 @@ object Config {
    */
   val kernelSigma: Option[Double] = sys.env.get("SCAPULA_KERNEL_SIGMA").map(_.toDouble)
   val kernelScale: Option[Double] = sys.env.get("SCAPULA_KERNEL_SCALE").map(_.toDouble)
+
+  /**
+   * Dual-kernel override: two independently specified Gaussian terms (absolute mm, NOT mesh-relative), summed --
+   * e.g. a "global" term (large sigma) plus a "local" term (small sigma), each with its own amplitude, for testing
+   * an exact user-chosen (sigma, scale) pair per term instead of the fixed L/2+L/10 ratios the 2-term kernel uses.
+   * All four must be set together; takes priority over the single-kernel override above if both are set.
+   * Unset (default) = disabled.
+   */
+  val dualKernelSigma1: Option[Double] = sys.env.get("SCAPULA_DUAL_KERNEL_SIGMA1").map(_.toDouble)
+  val dualKernelScale1: Option[Double] = sys.env.get("SCAPULA_DUAL_KERNEL_SCALE1").map(_.toDouble)
+  val dualKernelSigma2: Option[Double] = sys.env.get("SCAPULA_DUAL_KERNEL_SIGMA2").map(_.toDouble)
+  val dualKernelScale2: Option[Double] = sys.env.get("SCAPULA_DUAL_KERNEL_SCALE2").map(_.toDouble)
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

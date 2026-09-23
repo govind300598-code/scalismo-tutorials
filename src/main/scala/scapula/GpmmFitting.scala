@@ -48,7 +48,11 @@ object GpmmFitting {
                maxRank: Int = Config.gpMaxRank,
                kernelTerms: Int = Config.kernelTerms,
                singleKernelSigma: Option[Double] = Config.kernelSigma,
-               singleKernelScale: Option[Double] = Config.kernelScale
+               singleKernelScale: Option[Double] = Config.kernelScale,
+               dualKernelSigma1: Option[Double] = Config.dualKernelSigma1,
+               dualKernelScale1: Option[Double] = Config.dualKernelScale1,
+               dualKernelSigma2: Option[Double] = Config.dualKernelSigma2,
+               dualKernelScale2: Option[Double] = Config.dualKernelScale2
   ): (LowRankGaussianProcess[_3D, EuclideanVector[_3D]], PointDistributionModel[_3D, TriangleMesh]) = {
     require(kernelTerms == 2 || kernelTerms == 3, s"kernelTerms must be 2 or 3, got $kernelTerms")
     val box = referenceMesh.pointSet.boundingBox
@@ -58,21 +62,28 @@ object GpmmFitting {
     println(f"  [GpmmFitting] reference bounding box: ${extent.x}%.1f x ${extent.y}%.1f x ${extent.z}%.1f mm " +
       f"(longest axis ${measuredLongestSide}%.1f mm)${if (longestSideMm.isDefined) f" -- OVERRIDDEN to ${size}%.1f mm" else ""}")
 
-    val kernelSum = (singleKernelSigma, singleKernelScale) match {
-      case (Some(sigma), Some(scaleFactor)) =>
-        println(f"  [GpmmFitting] kernel: SINGLE term, sigma=$sigma%.1f mm, scaleFactor=$scaleFactor%.1f mm (absolute, not mesh-relative)")
-        GaussianKernel3D(sigma, scaleFactor)
+    val kernelSum = (dualKernelSigma1, dualKernelScale1, dualKernelSigma2, dualKernelScale2) match {
+      case (Some(s1), Some(a1), Some(s2), Some(a2)) =>
+        println(f"  [GpmmFitting] kernel: DUAL term, term1 sigma=$s1%.1f mm scaleFactor=$a1%.1f mm, " +
+          f"term2 sigma=$s2%.1f mm scaleFactor=$a2%.1f mm (absolute, not mesh-relative)")
+        GaussianKernel3D(s1, a1) + GaussianKernel3D(s2, a2)
       case _ =>
-        val kernelCoarse = GaussianKernel3D(size / 2, size * 0.10)
-        val kernelFine = GaussianKernel3D(size / 10, size * 0.0333)
-        val sum = if (kernelTerms == 3) {
-          val kernelMid = GaussianKernel3D(size / 5, size * 0.0667)
-          kernelCoarse + kernelMid + kernelFine
-        } else {
-          kernelCoarse + kernelFine
+        (singleKernelSigma, singleKernelScale) match {
+          case (Some(sigma), Some(scaleFactor)) =>
+            println(f"  [GpmmFitting] kernel: SINGLE term, sigma=$sigma%.1f mm, scaleFactor=$scaleFactor%.1f mm (absolute, not mesh-relative)")
+            GaussianKernel3D(sigma, scaleFactor)
+          case _ =>
+            val kernelCoarse = GaussianKernel3D(size / 2, size * 0.10)
+            val kernelFine = GaussianKernel3D(size / 10, size * 0.0333)
+            val sum = if (kernelTerms == 3) {
+              val kernelMid = GaussianKernel3D(size / 5, size * 0.0667)
+              kernelCoarse + kernelMid + kernelFine
+            } else {
+              kernelCoarse + kernelFine
+            }
+            println(s"  [GpmmFitting] kernel: $kernelTerms-term (${if (kernelTerms == 3) "coarse+mid+fine" else "coarse+fine, NO mid term"})")
+            sum
         }
-        println(s"  [GpmmFitting] kernel: $kernelTerms-term (${if (kernelTerms == 3) "coarse+mid+fine" else "coarse+fine, NO mid term"})")
-        sum
     }
     val kernel = DiagonalKernel3D(kernelSum, outputDim = 3)
     val gp = GaussianProcess3D[EuclideanVector[_3D]](kernel)
