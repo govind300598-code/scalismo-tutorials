@@ -79,6 +79,15 @@ object Config {
    */
   val kernelTerms: Int = env("SCAPULA_KERNEL_TERMS", "3").toInt
   require(kernelTerms == 2 || kernelTerms == 3, s"SCAPULA_KERNEL_TERMS must be 2 or 3, got $kernelTerms")
+
+  /**
+   * Single-Gaussian-kernel override, for a sigma/scaleFactor grid search (absolute mm, NOT scaled to the mesh
+   * size like the 2/3-term kernels above). When both are set, GpmmFitting.buildGpmm uses ONE GaussianKernel3D
+   * term with these exact values instead of the multi-scale coarse/mid/fine sum, ignoring kernelTerms entirely.
+   * Unset (default) = disabled, falls back to the multi-scale kernel.
+   */
+  val kernelSigma: Option[Double] = sys.env.get("SCAPULA_KERNEL_SIGMA").map(_.toDouble)
+  val kernelScale: Option[Double] = sys.env.get("SCAPULA_KERNEL_SCALE").map(_.toDouble)
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */

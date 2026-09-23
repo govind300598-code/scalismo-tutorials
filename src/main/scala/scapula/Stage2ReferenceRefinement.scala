@@ -230,8 +230,11 @@ object Stage2ReferenceRefinement {
     CsvWriter.write(
       new File(Config.outDir, "final_fit_quality.csv"),
       Seq("subject", "rigid_mean_mm", "rigid_rms_mm", "rigid_hd95_mm", "rigid_hd_mm", "rigid_landmark_rmse_mm",
-        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm", "fit_landmark_rmse_mm"),
-      finalRows.map { case (id, b, lb, a, la) => Seq(id, b.mean, b.rms, b.hd95, b.hd, lb, a.mean, a.rms, a.hd95, a.hd, la) }
+        "fit_mean_mm", "fit_rms_mm", "fit_hd95_mm", "fit_hd_mm", "fit_landmark_rmse_mm", "fit_chamfer_distance_mm"),
+      // fit_chamfer_distance_mm is the SAME quantity as fit_mean_mm (Metrics.symmetric's mean field) -- an explicit
+      // alias column, since "Chamfer distance" (CV/point-cloud terminology) and "mean surface distance" / ASSD
+      // (medical-imaging terminology) name the identical computation. Not a second, independently-computed metric.
+      finalRows.map { case (id, b, lb, a, la) => Seq(id, b.mean, b.rms, b.hd95, b.hd, lb, a.mean, a.rms, a.hd95, a.hd, la, a.mean) }
     )
 
     val beforeMean = finalRows.map(_._2.mean).sum / finalRows.length
