@@ -53,7 +53,7 @@ def main():
 
     labels, dirs = [], []
     for pair in args.configs:
-        label, d = pair.split("=", 1)
+        label, d = pair.rsplit("=", 1)
         labels.append(label)
         dirs.append(os.path.expanduser(d))
 
