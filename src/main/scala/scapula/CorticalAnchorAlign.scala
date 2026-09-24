@@ -160,13 +160,13 @@ object BonePairLoader {
   }
 
   private def stlMap(dir: File): Map[String, File] =
-    Option(dir.listFiles()).getOrElse(Array.empty)
+    Option(dir.listFiles()).getOrElse(Array.empty[File])
       .filter(_.getName.toLowerCase.endsWith(".stl"))
       .map(f => f.getName.stripSuffix(".stl") -> f)
       .toMap
 
   private def stlMapBySuffix(dir: File, suffix: String): Map[String, File] =
-    Option(dir.listFiles()).getOrElse(Array.empty)
+    Option(dir.listFiles()).getOrElse(Array.empty[File])
       .filter(f => f.getName.toLowerCase.endsWith(s"$suffix.stl"))
       .map(f => f.getName.stripSuffix(s"$suffix.stl") -> f)
       .toMap
