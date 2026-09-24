@@ -103,12 +103,20 @@ object Stage2CorticalAnchor {
       println(s"Quality filter loaded: ${ids.size} good specimens from $path")
       ids
     }
-    val pairs = goodFilter match {
+    val filteredPairs = goodFilter match {
       case Some(allowed) =>
         val filtered = allPairs.filter(p => allowed.contains(p.modelId))
         println(s"Pairs after quality filter: ${filtered.length} / ${allPairs.length}")
         filtered
       case None => allPairs
+    }
+    val maxPairs = sys.env.get("SCAPULA_MAX_PAIRS").map(_.toInt)
+    val pairs = maxPairs match {
+      case Some(n) =>
+        val capped = filteredPairs.take(n)
+        println(s"SCAPULA_MAX_PAIRS=$n — running on first ${capped.length} specimen(s) only")
+        capped
+      case None => filteredPairs
     }
 
     println(s"Found ${pairs.length} bone pairs")
