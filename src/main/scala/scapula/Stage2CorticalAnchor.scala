@@ -129,8 +129,12 @@ object Stage2CorticalAnchor {
     def lookupLandmarks(pair: CorticalAnchorAlign.BonePair): Option[IndexedSeq[scalismo.geometry.Landmark[scalismo.geometry._3D]]] =
       landmarks.get(pair.modelId).orElse(landmarks.get(pair.subject))
 
-    // Use the first available pair as reference; landmarks are not required.
-    val refPair = pairs.headOption
+    // Use SCAPULA_REF_ID if set (e.g. "SH_00843_scapula_0"), otherwise the first pair.
+    val refPair = sys.env.get("SCAPULA_REF_ID").flatMap { id =>
+        val found = pairs.find(p => p.modelId == id || p.subject == id)
+        if (found.isEmpty) println(s"!! SCAPULA_REF_ID='$id' not found in pair list — using first pair instead")
+        found
+      }.orElse(pairs.headOption)
       .getOrElse(throw new RuntimeException("No bone pairs found — check directory layout"))
     val refCortical    = ScapulaData.loadMesh(refPair.corticalFile)
     val refCorticalLms = lookupLandmarks(refPair)
