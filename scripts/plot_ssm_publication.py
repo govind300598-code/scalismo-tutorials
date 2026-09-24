@@ -59,7 +59,7 @@ def plot_compactness(df, out_path):
 
     # annotate 90% crossing
     n90 = df[df["cumulative_variance_fraction"] >= 0.90]["num_components"].min()
-    y90 = float(df[df["num_components"] == n90]["cumulative_variance_fraction"]) * 100
+    y90 = float(df[df["num_components"] == n90]["cumulative_variance_fraction"].iloc[0]) * 100
     ax2.annotate(f"{n90} modes\n= 90%",
                  xy=(n90, y90), xytext=(n90 + 1.2, y90 - 12),
                  arrowprops=dict(arrowstyle="->", color="gray"),
