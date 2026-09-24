@@ -20,6 +20,14 @@ object Config {
   val dataDir: File = new File(env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
   val outDir: File = new File(env("SCAPULA_OUT_DIR", "/home/g25upadh/Documents/database_v1.11/scapula_ssm_out"))
 
+  /** Directory that holds Combined-folder data (_Segment_2 / _Segment_3 naming). */
+  val combinedDataDir: File = new File(
+    env("SCAPULA_COMBINED_DIR", env("SCAPULA_DATA_DIR", "/home/g25upadh/Documents/database_v1.11/paired_scapulae_STLs"))
+  )
+
+  /** Direct path to a specific CSV landmark file; bypasses the auto-detect in csvFile(). */
+  val csvOverride: Option[File] = sys.env.get("SCAPULA_CSV_PATH").map(new File(_))
+
   /** Number of vertices of the model reference. All registered shapes and the SSM live at this resolution. */
   val modelResolution: Int = env("SCAPULA_MODEL_RES", "5000").toInt
 
@@ -47,6 +55,11 @@ object Config {
   val showUi: Boolean = env("SCAPULA_UI", "true").toBoolean
 
   val seed: Long = env("SCAPULA_SEED", "42").toLong
+
+  // Quality-filter thresholds for Stage0DataAudit.
+  val minVolumeMm3: Double  = env("SCAPULA_MIN_VOLUME_MM3", "5000").toDouble   // 5 cm³
+  val maxVolumeMm3: Double  = env("SCAPULA_MAX_VOLUME_MM3", "800000").toDouble // 800 cm³
+  val minVertices: Int      = env("SCAPULA_MIN_VERTICES", "100").toInt
 }
 
 /** Loading, landmark parsing, mirroring and the small geometric helpers shared by all stages. */
@@ -74,6 +87,32 @@ object ScapulaData {
         )
       )
   }
+
+  /** Pick the single_scapulae CSV — used for the Combined folder's specimens. */
+  def csvFileSingle(dir: File): File = {
+    val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
+    files
+      .filter(_.getName.toLowerCase.endsWith(".csv"))
+      .filter(f => f.getName.toLowerCase.contains("single") && f.getName.toLowerCase.contains("scapula"))
+      .sortBy(_.getName)
+      .headOption
+      .getOrElse(
+        throw new RuntimeException(
+          s"No single-scapula CSV found in ${dir.getPath}. Present: ${files.map(_.getName).mkString(", ")}"
+        )
+      )
+  }
+
+  /**
+   * Resolve a landmark CSV, trying in order:
+   *   1. SCAPULA_CSV_PATH override if set
+   *   2. csvFileSingle for a single-scapula dir
+   *   3. csvFile (paired fallback)
+   */
+  def resolvedCsv(csvOverride: Option[File], searchDir: File, preferSingle: Boolean = false): File =
+    csvOverride
+      .filter(_.exists())
+      .getOrElse(if (preferSingle) csvFileSingle(searchDir) else csvFile(searchDir))
 
   private def normaliseHeader(h: String): String = h.trim.toLowerCase.replaceAll("[^a-z0-9]", "")
 

@@ -171,3 +171,63 @@ object BonePairLoader {
       .map(f => f.getName.stripSuffix(s"$suffix.stl") -> f)
       .toMap
 }
+
+/**
+ * Loads BonePairs from the Combined-folder naming convention:
+ *
+ *   {baseId}_Segment_2.stl  → cortical
+ *   {baseId}_Segment_3.stl  → trabecular
+ *
+ * The baseId is typically "{subjectId}_scapula_0" (e.g. "SH_00894_scapula_0").
+ * The subject prefix (used for CSV lookup) is everything before the first
+ * "_scapula" or "-scapula" token (e.g. "SH_00894").
+ *
+ * Specimens whose name contains a bad-quality flag ("marche pas", "scaling", …)
+ * are still returned so Stage0DataAudit can report them explicitly; they carry
+ * their raw base ID which contains the flag string.
+ */
+object Segment23Loader {
+
+  private val badNameFlags = Seq("marche pas", "scaling", "bad stl", "exclude", "corrupt")
+
+  def fromDir(dir: File): IndexedSeq[CorticalAnchorAlign.BonePair] = {
+    val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
+
+    // build case-preserving maps: baseId -> File
+    val cortical   = segmentMap(files, "_Segment_2.stl")
+    val trabecular = segmentMap(files, "_Segment_3.stl")
+
+    cortical.keySet.intersect(trabecular.keySet).toIndexedSeq.sorted.map { base =>
+      CorticalAnchorAlign.BonePair(
+        modelId        = base,
+        corticalFile   = cortical(base),
+        trabecularFile = trabecular(base),
+        isRight        = false,
+        subject        = subjectFromBase(base)
+      )
+    }
+  }
+
+  /** True if the specimen's base name contains a known bad-quality marker. */
+  def isFlaggedBad(base: String): Boolean =
+    badNameFlags.exists(flag => base.toLowerCase.contains(flag))
+
+  /** Everything before the first "_scapula" or "-scapula" token, trimmed. */
+  def subjectFromBase(base: String): String = {
+    val lo = base.toLowerCase
+    val indices = Seq(lo.indexOf("_scapula"), lo.indexOf("-scapula")).filter(_ >= 0)
+    if (indices.nonEmpty) base.take(indices.min).trim else base
+  }
+
+  private def segmentMap(files: Array[File], suffix: String): Map[String, File] = {
+    val lo = suffix.toLowerCase
+    files
+      .filter(_.getName.toLowerCase.endsWith(lo))
+      .map { f =>
+        val n = f.getName
+        // drop exactly suffix.length characters from the end, preserving case in base
+        n.dropRight(suffix.length) -> f
+      }
+      .toMap
+  }
+}
