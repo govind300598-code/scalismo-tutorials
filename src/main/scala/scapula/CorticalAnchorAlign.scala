@@ -69,23 +69,27 @@ object CorticalAnchorAlign {
    *
    * @param cortical       cortical mesh of the moving specimen
    * @param trabecular     trabecular mesh of the SAME specimen (same scan coordinates)
-   * @param corticalLms    landmarks on the cortical mesh
+   * @param corticalLms    landmarks on the cortical mesh, or None to use centroid+ICP
    * @param refCortical    cortical reference mesh (the fixed target)
-   * @param refCorticalLms landmarks on the reference cortical mesh
-   * @param icpIterations  ICP iterations applied after landmark pre-alignment (0 = skip ICP)
+   * @param refCorticalLms landmarks on the reference cortical mesh, or None to use centroid+ICP
+   * @param icpIterations  ICP iterations applied after pre-alignment (0 = skip ICP)
    */
   def alignPair(
     cortical: TriangleMesh[_3D],
     trabecular: TriangleMesh[_3D],
-    corticalLms: IndexedSeq[Landmark[_3D]],
+    corticalLms: Option[IndexedSeq[Landmark[_3D]]],
     refCortical: TriangleMesh[_3D],
-    refCorticalLms: IndexedSeq[Landmark[_3D]],
+    refCorticalLms: Option[IndexedSeq[Landmark[_3D]]],
     icpIterations: Int = 30
   )(implicit rng: Random): AlignedPair = {
 
-    // Step 1: align cortical with landmark Procrustes + ICP
-    val (alignedCortical, alignedLms) =
-      RigidAlign.landmarkThenIcp(cortical, corticalLms, refCortical, refCorticalLms, icpIterations)
+    // Step 1: align cortical — use landmarks when present, otherwise centroid + trimmed ICP
+    val (alignedCortical, alignedLms) = (corticalLms, refCorticalLms) match {
+      case (Some(lms), Some(refLms)) =>
+        RigidAlign.landmarkThenIcp(cortical, lms, refCortical, refLms, icpIterations)
+      case _ =>
+        RigidAlign.centroidThenIcp(cortical, refCortical, icpIterations)
+    }
 
     // Step 2: recover the composed rigid transform from before/after point pairs.
     //   200 pairs is far more than the 3 needed to pin a 6-DOF transform; the

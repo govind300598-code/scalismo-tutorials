@@ -57,6 +57,32 @@ object RigidAlign {
     current
   }
 
+  /**
+   * Centroid translation followed by trimmed rigid ICP.
+   *
+   * Used when no anatomical landmarks are available (e.g. the Hoel SH_XXXXX specimens). The moving
+   * mesh is translated so that its centroid coincides with the target centroid, giving ICP a
+   * consistent starting point without relying on manual landmark placement. Returns an empty
+   * landmark sequence so the caller can treat both paths uniformly.
+   */
+  def centroidThenIcp(moving: TriangleMesh[_3D],
+                      target: TriangleMesh[_3D],
+                      icpIterations: Int = 30
+  )(implicit rng: Random): (TriangleMesh[_3D], IndexedSeq[Landmark[_3D]]) = {
+    val mc = meshCentroid(moving)
+    val tc = meshCentroid(target)
+    val dx = tc.x - mc.x; val dy = tc.y - mc.y; val dz = tc.z - mc.z
+    val translated = moving.transform(p => Point3D(p.x + dx, p.y + dy, p.z + dz))
+    val aligned = if (icpIterations <= 0) translated else rigidIcp(translated, target, icpIterations)
+    (aligned, IndexedSeq.empty)
+  }
+
+  private def meshCentroid(mesh: TriangleMesh[_3D]): Point3D = {
+    val pts = mesh.pointSet.points.toIndexedSeq
+    val n = pts.length.toDouble
+    Point3D(pts.map(_.x).sum / n, pts.map(_.y).sum / n, pts.map(_.z).sum / n)
+  }
+
   /** Landmark Procrustes followed by trimmed rigid ICP. Returns the aligned mesh and the aligned landmarks. */
   def landmarkThenIcp(mesh: TriangleMesh[_3D],
                       lms: IndexedSeq[Landmark[_3D]],

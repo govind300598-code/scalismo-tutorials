@@ -68,20 +68,26 @@ object Stage2CorticalAnchor {
 
     // ----------------------------------------------------------------
     // Resolve data directory and landmark CSV for the selected layout.
-    val (dataDir, csv) = layout match {
-      case "segment23" =>
-        val dir = Config.combinedDataDir
-        val c   = ScapulaData.resolvedCsv(Config.csvOverride, Config.dataDir, preferSingle = true)
-        (dir, c)
-      case _ =>
-        val dir = Config.dataDir
-        (dir, ScapulaData.csvFile(dir))
+    val dataDir = layout match {
+      case "segment23" => Config.combinedDataDir
+      case _           => Config.dataDir
     }
     println(s"Data directory : ${dataDir.getAbsolutePath}")
-    println(s"Landmark CSV   : ${csv.getAbsolutePath}")
 
-    val (landmarks, fromHeader, _) = ScapulaData.readLandmarkCsv(csv)
-    if (!fromHeader) println("!! landmark columns resolved via fallback offsets — check CSV header")
+    val landmarks: Map[String, IndexedSeq[scalismo.geometry.Landmark[scalismo.geometry._3D]]] =
+      scala.util.Try {
+        val csv = layout match {
+          case "segment23" => ScapulaData.resolvedCsv(Config.csvOverride, Config.dataDir, preferSingle = true)
+          case _           => ScapulaData.csvFile(Config.dataDir)
+        }
+        println(s"Landmark CSV   : ${csv.getAbsolutePath}")
+        val (lmMap, fromHeader, _) = ScapulaData.readLandmarkCsv(csv)
+        if (!fromHeader) println("!! landmark columns resolved via fallback offsets — check CSV header")
+        lmMap
+      }.getOrElse {
+        println("No landmark CSV found — all specimens will use centroid+ICP alignment")
+        Map.empty
+      }
 
     // ----------------------------------------------------------------
     // Discover bone pairs, then optionally filter to the Stage-0 approved list.
@@ -109,55 +115,56 @@ object Stage2CorticalAnchor {
     require(pairs.nonEmpty, "No bone pairs found — check directory layout and SCAPULA_BONE_LAYOUT")
 
     // ----------------------------------------------------------------
-    // Choose a reference: the first specimen that has a landmark row.
-    // For segment23 layout the CSV keys may be subject prefixes ("SH_00894") rather than
-    // full base IDs ("SH_00894_scapula_0"), so try both.
+    // Landmark lookup: tries full modelId then the shorter subject prefix.
+    // Returns None when no CSV row exists (Hoel specimens have no landmarks —
+    // centroid+ICP is used instead).
     def lookupLandmarks(pair: CorticalAnchorAlign.BonePair): Option[IndexedSeq[scalismo.geometry.Landmark[scalismo.geometry._3D]]] =
       landmarks.get(pair.modelId).orElse(landmarks.get(pair.subject))
 
-    val refPair = pairs.find(p => lookupLandmarks(p).isDefined)
-      .getOrElse(throw new RuntimeException("No bone pair has a matching landmark row"))
+    // Use the first available pair as reference; landmarks are not required.
+    val refPair = pairs.headOption
+      .getOrElse(throw new RuntimeException("No bone pairs found — check directory layout"))
     val refCortical    = ScapulaData.loadMesh(refPair.corticalFile)
-    val refCorticalLms = lookupLandmarks(refPair).get
-    println(s"Reference specimen : ${refPair.modelId}")
+    val refCorticalLms = lookupLandmarks(refPair)
+    println(
+      s"Reference specimen : ${refPair.modelId}" +
+      (if (refCorticalLms.isDefined) " (with landmarks)" else " (no landmarks — centroid+ICP mode)")
+    )
 
     // ----------------------------------------------------------------
-    // Align every other pair, save outputs.
+    // Align every pair, save outputs.
     val corticalOutDir    = new File(outDir, "aligned_cortical")
     val trabecularOutDir  = new File(outDir, "aligned_trabecular")
     corticalOutDir.mkdirs()
     trabecularOutDir.mkdirs()
 
-    val results = pairs.flatMap { pair =>
-      lookupLandmarks(pair).map { lms =>
+    val results = pairs.map { pair =>
+      val cortical    = ScapulaData.loadMesh(pair.corticalFile)
+      val trabecular  = ScapulaData.loadMesh(pair.trabecularFile)
 
-        val cortical    = ScapulaData.loadMesh(pair.corticalFile)
-        val trabecular  = ScapulaData.loadMesh(pair.trabecularFile)
+      val aligned = CorticalAnchorAlign.alignPair(
+        cortical       = cortical,
+        trabecular     = trabecular,
+        corticalLms    = lookupLandmarks(pair),
+        refCortical    = refCortical,
+        refCorticalLms = refCorticalLms,
+        icpIterations  = Config.icpIterations
+      )
 
-        val aligned = CorticalAnchorAlign.alignPair(
-          cortical       = cortical,
-          trabecular     = trabecular,
-          corticalLms    = lms,
-          refCortical    = refCortical,
-          refCorticalLms = refCorticalLms,
-          icpIterations  = Config.icpIterations
-        )
+      val dCortical   = Metrics.symmetric(aligned.cortical,   refCortical)
+      val dTrabecular = Metrics.symmetric(aligned.trabecular, aligned.cortical)
 
-        val dCortical   = Metrics.symmetric(aligned.cortical,   refCortical)
-        val dTrabecular = Metrics.symmetric(aligned.trabecular, aligned.cortical)
+      MeshIO.writeMesh(aligned.cortical,
+        new File(corticalOutDir,   s"${pair.modelId}.stl")).get
+      MeshIO.writeMesh(aligned.trabecular,
+        new File(trabecularOutDir, s"${pair.modelId}.stl")).get
 
-        MeshIO.writeMesh(aligned.cortical,
-          new File(corticalOutDir,   s"${pair.modelId}.stl")).get
-        MeshIO.writeMesh(aligned.trabecular,
-          new File(trabecularOutDir, s"${pair.modelId}.stl")).get
-
-        println(
-          f"  ${pair.modelId}%-30s " +
-          f"cortical→ref: ${dCortical.render}   " +
-          f"trabecular↔cortical: ${dTrabecular.render}"
-        )
-        (pair.modelId, dCortical, dTrabecular)
-      }
+      println(
+        f"  ${pair.modelId}%-30s " +
+        f"cortical→ref: ${dCortical.render}   " +
+        f"trabecular↔cortical: ${dTrabecular.render}"
+      )
+      (pair.modelId, dCortical, dTrabecular)
     }
 
     // ----------------------------------------------------------------
