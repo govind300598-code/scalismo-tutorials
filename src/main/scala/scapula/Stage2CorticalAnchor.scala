@@ -1,6 +1,7 @@
 package scapula
 
 import scalismo.io.MeshIO
+import scalismo.ui.api.ScalismoUI
 import scalismo.utils.Random
 
 import java.io.File
@@ -176,7 +177,7 @@ object Stage2CorticalAnchor {
         f"cortical→ref: ${dCortical.render}   " +
         f"trabecular↔cortical: ${dTrabecular.render}"
       )
-      (pair.modelId, dCortical, dTrabecular)
+      (pair.modelId, aligned, dCortical, dTrabecular)
     }
 
     // ----------------------------------------------------------------
@@ -187,8 +188,8 @@ object Stage2CorticalAnchor {
     println("=" * 110)
     println(s"  Aligned ${results.length} pairs")
     if (results.nonEmpty) {
-      val meanCortRef  = results.map(_._2.mean).sum / results.length
-      val meanTrabCort = results.map(_._3.mean).sum / results.length
+      val meanCortRef  = results.map(_._3.mean).sum / results.length
+      val meanTrabCort = results.map(_._4.mean).sum / results.length
       println(f"  mean cortical→reference surface distance : $meanCortRef%.2f mm")
       println(f"  mean trabecular↔cortical surface distance: $meanTrabCort%.2f mm")
       println()
@@ -199,5 +200,26 @@ object Stage2CorticalAnchor {
     println(s"  Aligned meshes written to:")
     println(s"    cortical    → ${corticalOutDir.getAbsolutePath}")
     println(s"    trabecular  → ${trabecularOutDir.getAbsolutePath}")
+
+    // ----------------------------------------------------------------
+    // Optional Scalismo viewer (set SCAPULA_UI=true to enable).
+    // The window stays open until you close it — all aligned meshes
+    // are shown together so you can visually inspect the alignment.
+    if (Config.showUi) {
+      println()
+      println("Opening Scalismo viewer — close the window to exit.")
+      val ui = ScalismoUI()
+
+      val cortGroup = ui.createGroup("cortical_aligned")
+      val trabGroup = ui.createGroup("trabecular_aligned")
+
+      // Reference cortical in its own slot so it stands out
+      ui.show(cortGroup, refCortical, s"REF_${refPair.modelId}")
+
+      results.foreach { case (id, aligned, _, _) =>
+        if (id != refPair.modelId) ui.show(cortGroup, aligned.cortical,   s"cort_$id")
+        ui.show(trabGroup, aligned.trabecular, s"trab_$id")
+      }
+    }
   }
 }
