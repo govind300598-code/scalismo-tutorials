@@ -252,6 +252,7 @@ object ScapulaData {
     Option(dir.listFiles())
       .getOrElse(Array.empty[File])
       .filter(_.getName.toLowerCase.endsWith(".stl"))
+      .filterNot(_.getName.toLowerCase.contains("humerus"))
       .sortBy(_.getName)
       .toIndexedSeq
       .map { f =>
