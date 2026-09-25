@@ -60,6 +60,26 @@ object Config {
   val subjectLimit: Int = env("SCAPULA_SUBJECT_LIMIT", "-1").toInt
 
   /**
+   * Target-mesh decimation vertex count. Targets only produce a distance image for non-rigid fitting, so they do
+   * NOT need to match modelResolution (which is required for the GP Cholesky basis on the reference). A higher
+   * targetResolution retains more detail at the cost of a larger distance image; lower is faster. Set to -1 (or
+   * omit the env var) to decimate targets to the same resolution as the reference (backward-compatible default).
+   */
+  val targetResolution: Int = env("SCAPULA_TARGET_RES", modelResolution.toString).toInt
+
+  /**
+   * Colon- or comma-separated list of data directories containing STL files and landmark CSVs. Allows combining
+   * multiple datasets (paired_scapulae, paired_shoulder, hill_sachs) into a single SSM run. Falls back to the
+   * single dataDir when not set.
+   */
+  val dataDirs: IndexedSeq[File] = sys.env.get("SCAPULA_DATA_DIRS")
+    .map(_.split("[,:]").filter(_.trim.nonEmpty).map(s => new File(s.trim)).toIndexedSeq)
+    .getOrElse(IndexedSeq(dataDir))
+
+  /** Number of random samples drawn per k when computing SSM specificity. */
+  val specificitySamples: Int = env("SCAPULA_SPECIFICITY_SAMPLES", "30").toInt
+
+  /**
    * If set, fit only the K subjects ranked most "average" (smallest mean pairwise distance -- see
    * ReferenceSelection.medoid), instead of everyone. The medoid ranking itself is still computed over the WHOLE
    * pool (dropping subjects first would bias which one looks "average"); only the expensive non-rigid fitting

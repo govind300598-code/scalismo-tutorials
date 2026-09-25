@@ -99,7 +99,7 @@ object GPA {
 
 object Stage3PCAModel {
 
-  private val specificitySamplesPerK = 30
+  private val specificitySamplesPerK = Config.specificitySamples
 
   def main(args: Array[String]): Unit = {
     scalismo.initialize()

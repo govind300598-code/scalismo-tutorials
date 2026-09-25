@@ -39,6 +39,10 @@ object ReferenceSelection {
    * expressed in the LEFT-scapula frame (right-side specimens mirrored). Restricting to one side per subject by
    * default avoids a subject's near-identical left+right pair acting as two votes for the same shape, both in
    * the medoid search and in the mean-shape averaging.
+   *
+   * `resolution` is used for the mesh stored in the Pool (the reference candidate or the shape to be fitted).
+   * Targets only need a distance image so they can be kept at a higher resolution; the caller handles that
+   * separately -- this method always decimates to `resolution`.
    */
   def loadPool(dir: File, resolution: Int): IndexedSeq[Pool] = {
     val csv = ScapulaData.csvFile(dir)
@@ -63,6 +67,11 @@ object ReferenceSelection {
 
     if (Config.subjectLimit > 0) full.take(Config.subjectLimit) else full
   }
+
+  /** Multi-directory overload: loads one pool per directory and concatenates them. Model IDs must be globally
+    * unique across directories (they are for the paired_scapulae / paired_shoulder / hill_sachs datasets). */
+  def loadPool(dirs: IndexedSeq[File], resolution: Int): IndexedSeq[Pool] =
+    dirs.flatMap(d => loadPool(d, resolution))
 
   private def alignedDistance(moving: Pool, fixed: Pool)(implicit rng: Random): Metrics.SurfaceStats = {
     val (aligned, _) = RigidAlign.landmarkThenIcp(moving.mesh, moving.landmarks, fixed.mesh, fixed.landmarks,
@@ -99,11 +108,14 @@ object ReferenceSelection {
     (pool.find(_.specimen.modelId == best.specimen.modelId).get, ranked)
   }
 
-  /** Convenience: loads the pool, computes the full pairwise matrix, and picks the medoid in one call. */
-  def chooseReference(dir: File, resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) = {
-    val pool = loadPool(dir, resolution)
+  /** Picks the medoid from an already-loaded pool (avoids the double-load that the dir+resolution overload has). */
+  def chooseReference(pool: IndexedSeq[Pool])(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) = {
     val matrix = pairwiseDistanceMatrix(pool)
     val (best, ranked) = medoid(pool, matrix)
     (best, ranked, matrix)
   }
+
+  /** Convenience: loads the pool, computes the full pairwise matrix, and picks the medoid in one call. */
+  def chooseReference(dir: File, resolution: Int)(implicit rng: Random): (Pool, IndexedSeq[Ranked], IndexedSeq[Pairwise]) =
+    chooseReference(loadPool(dir, resolution))
 }

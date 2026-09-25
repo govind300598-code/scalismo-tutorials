@@ -56,10 +56,11 @@ object Stage2ReferenceRefinement {
     scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
 
-    val dir = Config.dataDir
-    println(s"Data directory  : ${dir.getAbsolutePath}")
-    println(s"Model resolution: ${Config.modelResolution} vertices, refine passes: ${Config.refinePasses}, " +
-      s"rigid ICP iterations: ${Config.icpIterations}, landmark weight: ${Config.landmarkWeight}")
+    val dirs = Config.dataDirs
+    println(s"Data directories: ${dirs.map(_.getAbsolutePath).mkString(", ")}")
+    println(s"Model resolution: ${Config.modelResolution} vertices, target resolution: ${Config.targetResolution}, " +
+      s"refine passes: ${Config.refinePasses}, rigid ICP iterations: ${Config.icpIterations}, " +
+      s"landmark weight: ${Config.landmarkWeight}")
     Config.outDir.mkdirs()
 
     // Written first so every output directory is self-documenting -- essential once you start comparing runs
@@ -68,8 +69,9 @@ object Stage2ReferenceRefinement {
       new File(Config.outDir, "run_config.txt"),
       Seq("key", "value"),
       Seq(
-        Seq("dataDir", Config.dataDir.getAbsolutePath),
+        Seq("dataDirs", Config.dataDirs.map(_.getAbsolutePath).mkString(",")),
         Seq("modelResolution", Config.modelResolution),
+        Seq("targetResolution", Config.targetResolution),
         Seq("icpIterations", Config.icpIterations),
         Seq("refinePasses", Config.refinePasses),
         Seq("gpRelativeTolerance", Config.gpRelativeTolerance),
@@ -89,14 +91,14 @@ object Stage2ReferenceRefinement {
       )
     )
 
-    var pool = ReferenceSelection.loadPool(dir, Config.modelResolution)
+    var pool = ReferenceSelection.loadPool(dirs, Config.modelResolution)
     println(s"\n${pool.length} subjects in the pool " +
       s"(${if (Config.buildIndependentModel) "one side per subject" else "both sides"}, right mirrored to left" +
       s"${if (Config.subjectLimit > 0) s", capped to SCAPULA_SUBJECT_LIMIT=${Config.subjectLimit}" else ""})\n")
-    require(pool.size >= 2, s"Need at least 2 subjects, found ${pool.size}. Check SCAPULA_DATA_DIR / SCAPULA_SUBJECT_LIMIT.")
+    require(pool.size >= 2, s"Need at least 2 subjects, found ${pool.size}. Check SCAPULA_DATA_DIRS / SCAPULA_SUBJECT_LIMIT.")
 
     println("[Step 1] Bootstrap reference: medoid of the pool (pairwise similarity+ICP rigid-alignment distance matrix)")
-    val (bootstrap, ranking, pairwiseMatrix) = ReferenceSelection.chooseReference(dir, Config.modelResolution)
+    val (bootstrap, ranking, pairwiseMatrix) = ReferenceSelection.chooseReference(pool)
 
     CsvWriter.write(
       new File(Config.outDir, "pairwise_distance_matrix.csv"),
