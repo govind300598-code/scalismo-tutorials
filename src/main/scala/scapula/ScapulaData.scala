@@ -56,6 +56,15 @@ object Config {
     sys.env.get("SCAPULA_ONLY_SPECIMENS").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSet).filter(_.nonEmpty)
 
   /**
+   * Comma-separated specimen ids to drop from the run entirely (e.g. the 3 specimens flagged by rigid-landmark RMSE
+   * >30mm) -- the complement of SCAPULA_ONLY_SPECIMENS. Applied after SCAPULA_ONLY_SPECIMENS, so an id listed in
+   * both is excluded. The reference specimen is NOT exempt from this list: excluding it falls back to GPA-based
+   * reference selection among the remaining specimens. Leave unset ("") to exclude nothing.
+   */
+  val excludeSpecimenIds: Set[String] =
+    sys.env.get("SCAPULA_EXCLUDE_SPECIMENS").map(_.split(",").map(_.trim).filter(_.nonEmpty).toSet).getOrElse(Set.empty)
+
+  /**
    * Optional external template mesh to use as the SSM reference topology instead of an in-population specimen.
    * Disabled by default -- Stage2GPNonRigidRegistration instead picks the specimen from your own 24 whose landmarks
    * are closest to the population's mean landmark configuration (see referenceSpecimen in that file), which needs
