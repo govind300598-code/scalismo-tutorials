@@ -55,9 +55,32 @@ object ViewModeShapes {
     scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
 
-    val dir = Config.outDir
-    require(dir.exists(),
-      s"Output directory ${dir.getAbsolutePath} not found -- run Stage2ReferenceRefinement first.")
+    // ---- auto-detect the output directory with the MOST registered fits -----
+    // Looks at Config.outDir and every sibling directory whose name starts with
+    // "scapula_ssm_out", then picks the one with the most final_*_fit.stl files.
+    // Override by setting SCAPULA_OUT_DIR explicitly if needed.
+    val base = Config.outDir.getParentFile
+    val candidates: Array[File] = {
+      val siblings = Option(base.listFiles(f => f.isDirectory &&
+        f.getName.toLowerCase.startsWith("scapula_ssm_out")))
+        .getOrElse(Array.empty[File])
+      (siblings :+ Config.outDir).distinct
+    }
+
+    println("Scanning candidate output directories:")
+    val ranked = candidates.map { d =>
+      val n = Option(d.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
+        .getOrElse(Array.empty).length
+      println(f"  ${n}%3d fit(s)  ${d.getAbsolutePath}")
+      (n, d)
+    }.sortBy(-_._1)
+
+    val (nFits, dir) = ranked.headOption.getOrElse(
+      throw new RuntimeException(s"No scapula_ssm_out* directories found under ${base.getAbsolutePath}"))
+
+    require(nFits >= 3,
+      s"Best candidate ${dir.getAbsolutePath} has only $nFits fit(s) -- need at least 3.")
+    println(s"\nUsing: ${dir.getAbsolutePath}  ($nFits registered fits)")
 
     // ---- 1. load reference --------------------------------------------------
     val referenceFile = new File(dir, "reference_mean_shape.stl")
