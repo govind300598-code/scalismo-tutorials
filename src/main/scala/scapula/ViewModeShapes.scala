@@ -68,15 +68,18 @@ object ViewModeShapes {
     }
 
     println("Scanning candidate output directories:")
-    val ranked = candidates.map { d =>
-      val n = Option(d.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
-        .getOrElse(Array.empty).length
+    val ranked: Array[(Int, File)] = candidates.map { d =>
+      val n: Int = Option(d.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
+        .getOrElse(Array.empty[File]).length
       println(f"  ${n}%3d fit(s)  ${d.getAbsolutePath}")
       (n, d)
-    }.sortBy(-_._1)
+    }.sortBy((pair: (Int, File)) => -pair._1)
 
-    val (nFits, dir) = ranked.headOption.getOrElse(
-      throw new RuntimeException(s"No scapula_ssm_out* directories found under ${base.getAbsolutePath}"))
+    require(ranked.nonEmpty,
+      s"No scapula_ssm_out* directories found under ${base.getAbsolutePath}")
+    val bestPair: (Int, File) = ranked(0)
+    val nFits: Int  = bestPair._1
+    val dir: File   = bestPair._2
 
     require(nFits >= 3,
       s"Best candidate ${dir.getAbsolutePath} has only $nFits fit(s) -- need at least 3.")
