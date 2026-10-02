@@ -55,31 +55,36 @@ object ViewModeShapes {
     scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
 
-    // ---- auto-detect the output directory with the MOST registered fits -----
-    // Looks at Config.outDir and every sibling directory whose name starts with
-    // "scapula_ssm_out", then picks the one with the most final_*_fit.stl files.
-    // Override by setting SCAPULA_OUT_DIR explicitly if needed.
-    val base = Config.outDir.getParentFile
-    val candidates: Array[File] = {
-      val siblings = Option(base.listFiles(f => f.isDirectory &&
-        f.getName.toLowerCase.startsWith("scapula_ssm_out")))
-        .getOrElse(Array.empty[File])
-      (siblings :+ Config.outDir).distinct
-    }
+    // ---- locate the n=99 output directory -----------------------------------
+    // The 99-subject run lives under a separate top-level folder discovered
+    // by inspecting the other session's ScapulaData.scala (branch trusting-planck-6p05j8).
+    // All known candidate paths are listed here; the one with the most
+    // final_*_fit.stl files wins.  Override with SCAPULA_OUT_DIR if needed.
+    val knownCandidates: Seq[File] = Seq(
+      new File("/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"),
+      new File("/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"),
+      Config.outDir
+    )
+    // also scan siblings of Config.outDir that look like output directories
+    val siblingScan: Array[File] = Option(Config.outDir.getParentFile.listFiles(f =>
+      f.isDirectory && f.getName.toLowerCase.contains("ssm")))
+      .getOrElse(Array.empty[File])
+
+    val allCandidates: Seq[File] = (knownCandidates ++ siblingScan).distinct.filter(_.exists())
 
     println("Scanning candidate output directories:")
-    val ranked: Array[(Int, File)] = candidates.map { d =>
+    val ranked: Array[(Int, File)] = allCandidates.map { d =>
       val n: Int = Option(d.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
         .getOrElse(Array.empty[File]).length
       println(f"  ${n}%3d fit(s)  ${d.getAbsolutePath}")
       (n, d)
-    }.sortBy((pair: (Int, File)) => -pair._1)
+    }.toArray.sortBy((pair: (Int, File)) => -pair._1)
 
     require(ranked.nonEmpty,
-      s"No scapula_ssm_out* directories found under ${base.getAbsolutePath}")
+      "No output directories found -- check paths or set SCAPULA_OUT_DIR")
     val bestPair: (Int, File) = ranked(0)
-    val nFits: Int  = bestPair._1
-    val dir: File   = bestPair._2
+    val nFits: Int = bestPair._1
+    val dir: File  = bestPair._2
 
     require(nFits >= 3,
       s"Best candidate ${dir.getAbsolutePath} has only $nFits fit(s) -- need at least 3.")
