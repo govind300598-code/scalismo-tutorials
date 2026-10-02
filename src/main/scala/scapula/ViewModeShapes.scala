@@ -55,54 +55,64 @@ object ViewModeShapes {
     scalismo.initialize()
     implicit val rng: ScalismoRandom = ScalismoRandom(Config.seed)
 
-    // ---- locate the n=99 output directory -----------------------------------
-    // The 99-subject run lives under a separate top-level folder discovered
-    // by inspecting the other session's ScapulaData.scala (branch trusting-planck-6p05j8).
-    // All known candidate paths are listed here; the one with the most
-    // final_*_fit.stl files wins.  Override with SCAPULA_OUT_DIR if needed.
-    val knownCandidates: Seq[File] = Seq(
-      new File("/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out"),
-      new File("/home/g25upadh/Documents/100 plus scapula data/scapula_ssm_out"),
-      Config.outDir
-    )
-    // also scan siblings of Config.outDir that look like output directories
-    val siblingScan: Array[File] = Option(Config.outDir.getParentFile.listFiles(f =>
-      f.isDirectory && f.getName.toLowerCase.contains("ssm")))
-      .getOrElse(Array.empty[File])
+    // ---- locate the correct output directory --------------------------------
+    // Two different pipelines write to different locations and use different
+    // file layouts:
+    //
+    //   Pipeline A (n=99, trusting-planck-6p05j8 branch):
+    //     /home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out/
+    //       reference.vtk
+    //       registered/<id>.vtk   (one per subject)
+    //
+    //   Pipeline B (n=22, this branch):
+    //     Config.outDir/
+    //       reference_mean_shape.stl
+    //       final_<id>_fit.stl   (one per subject)
+    //
+    // We try Pipeline A first (hard-coded known path), then fall back to B.
+    // Override everything with SCAPULA_OUT_DIR if needed.
 
-    val allCandidates: Seq[File] = (knownCandidates ++ siblingScan).distinct.filter(_.exists())
+    val n99Dir  = new File("/home/g25upadh/Documents/100 plus scapula data/scapula_gp_registration_ssm_out")
+    val n99Reg  = new File(n99Dir, "registered")
+    val n99Ref  = new File(n99Dir, "reference.vtk")
 
-    println("Scanning candidate output directories:")
-    val ranked: Array[(Int, File)] = allCandidates.map { d =>
-      val n: Int = Option(d.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
-        .getOrElse(Array.empty[File]).length
-      println(f"  ${n}%3d fit(s)  ${d.getAbsolutePath}")
-      (n, d)
-    }.toArray.sortBy((pair: (Int, File)) => -pair._1)
+    // count meshes for each pipeline
+    def countVtk(d: File): Int =
+      Option(d.listFiles((_, n) => n.toLowerCase.endsWith(".vtk"))).getOrElse(Array.empty[File]).length
+    def countStl(d: File): Int =
+      Option(d.listFiles((_, n) => n.startsWith("final_") && n.endsWith("_fit.stl"))).getOrElse(Array.empty[File]).length
 
-    require(ranked.nonEmpty,
-      "No output directories found -- check paths or set SCAPULA_OUT_DIR")
-    val bestPair: (Int, File) = ranked(0)
-    val nFits: Int = bestPair._1
-    val dir: File  = bestPair._2
+    val n99Count = if (n99Reg.exists()) countVtk(n99Reg) else 0
+    val n22Count = countStl(Config.outDir)
 
-    require(nFits >= 3,
-      s"Best candidate ${dir.getAbsolutePath} has only $nFits fit(s) -- need at least 3.")
-    println(s"\nUsing: ${dir.getAbsolutePath}  ($nFits registered fits)")
+    println(s"Pipeline A (n=99 VTK): $n99Count meshes in ${n99Reg.getAbsolutePath}")
+    println(s"Pipeline B (n=22 STL): $n22Count meshes in ${Config.outDir.getAbsolutePath}")
+
+    val useN99 = n99Count >= n22Count && n99Count >= 3
+    println(s"\nUsing: ${if (useN99) s"Pipeline A — ${n99Dir.getAbsolutePath} ($n99Count subjects)"
+                         else s"Pipeline B — ${Config.outDir.getAbsolutePath} ($n22Count subjects)"}")
 
     // ---- 1. load reference --------------------------------------------------
-    val referenceFile = new File(dir, "reference_mean_shape.stl")
-    require(referenceFile.exists(),
-      s"$referenceFile not found -- run Stage2ReferenceRefinement first.")
-    val reference: TriangleMesh[_3D] = MeshIO.readMesh(referenceFile).get
+    val reference: TriangleMesh[_3D] = if (useN99) {
+      require(n99Ref.exists(), s"$n99Ref not found -- run Stage2GPNonRigidRegistration first.")
+      MeshIO.readMesh(n99Ref).get
+    } else {
+      val f = new File(Config.outDir, "reference_mean_shape.stl")
+      require(f.exists(), s"$f not found -- run Stage2ReferenceRefinement first.")
+      MeshIO.readMesh(f).get
+    }
 
-    // ---- 2. load all registered fits ----------------------------------------
-    val fitFiles = Option(dir.listFiles((_, name) => name.startsWith("final_") && name.endsWith("_fit.stl")))
-      .getOrElse(Array.empty[File])
-      .sortBy(_.getName)
+    // ---- 2. load all registered meshes --------------------------------------
+    val fitFiles: Array[File] = if (useN99) {
+      Option(n99Reg.listFiles((_, n) => n.toLowerCase.endsWith(".vtk")))
+        .getOrElse(Array.empty[File]).sortBy(_.getName)
+    } else {
+      Option(Config.outDir.listFiles((_, n) => n.startsWith("final_") && n.endsWith("_fit.stl")))
+        .getOrElse(Array.empty[File]).sortBy(_.getName)
+    }
 
     require(fitFiles.length >= 3,
-      s"Need at least 3 registered fits to build a PCA; found ${fitFiles.length} in ${dir.getAbsolutePath}.")
+      s"Need at least 3 registered meshes; found ${fitFiles.length}.")
 
     val subjectIds    = fitFiles.map(_.getName.stripPrefix("final_").stripSuffix("_fit.stl"))
     val fittedMeshes  = fitFiles.map(f => MeshIO.readMesh(f).get)
