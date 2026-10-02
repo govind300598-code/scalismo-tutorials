@@ -42,7 +42,7 @@ import java.io.File
  */
 object ViewModeShapes {
 
-  private val numModes   = 5   // PC1 – PC5
+  private val numModes   = 6   // PC1 – PC6
   private val sdExtreme  = 3.0
 
   // Colours matching JOR 2024 exactly
@@ -154,7 +154,7 @@ object ViewModeShapes {
       posView.color  = colorPos;  posView.opacity   = opacity
 
       // PC1 and PC5 start visible; PC2/3/4 start hidden to keep the scene clean
-      val visibleByDefault = k == 0 || k == 4
+      val visibleByDefault = k == 0 || k == 5
       if (!visibleByDefault) {
         negView.opacity  = 0.0f
         mView.opacity    = 0.0f
