@@ -114,10 +114,13 @@ object ViewModeShapes {
     require(fitFiles.length >= 3,
       s"Need at least 3 registered meshes; found ${fitFiles.length}.")
 
-    val subjectIds    = fitFiles.map(_.getName.stripPrefix("final_").stripSuffix("_fit.stl"))
+    val chosenDir: File = if (useN99) n99Dir else Config.outDir
+    val subjectIds = fitFiles.map { f =>
+      f.getName.stripSuffix(".vtk").stripPrefix("final_").stripSuffix("_fit.stl")
+    }
     val fittedMeshes  = fitFiles.map(f => MeshIO.readMesh(f).get)
 
-    println(s"Loaded ${fittedMeshes.length} registered fits from ${dir.getAbsolutePath}:")
+    println(s"Loaded ${fittedMeshes.length} registered fits from ${chosenDir.getAbsolutePath}:")
     subjectIds.foreach(id => println(s"  $id"))
 
     // ---- 3. build PCA in-memory (same logic as Stage3PCAModel) ---------------
@@ -188,7 +191,7 @@ object ViewModeShapes {
          |  Steel blue  = +${sdExtreme.toInt}σ
          |  All at ${(opacity * 100).toInt}% opacity — overlap regions show blended colour
          |
-         |Dataset: ${dir.getAbsolutePath}
+         |Dataset: ${chosenDir.getAbsolutePath}
          |Subjects: ${fittedMeshes.length}
          |PCA rank: ${pcaModel.rank}
          |""".stripMargin)
