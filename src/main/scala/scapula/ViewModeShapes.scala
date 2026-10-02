@@ -16,31 +16,40 @@ import java.io.File
  * JOR-2024-style transparent overlay visualization of the first three PCA modes.
  *
  * Loads ALL final_*_fit.stl meshes from Config.outDir (the same shapes Stage3PCAModel uses),
- * builds the PCA in-memory, then for each of PC1 / PC2 / PC3 creates a SINGLE ScalismoUI group
+ * builds the PCA in-memory, then for each of PC1–PC5 creates a SINGLE ScalismoUI group
  * containing all three states stacked in one view:
  *
- *   - −3σ  coral red    (opacity 0.70)
- *   - Mean  charcoal     (opacity 0.70)
- *   - +3σ  steel blue   (opacity 0.70)
+ *   - −3σ  coral red    (opacity 0.88)
+ *   - Mean  charcoal     (opacity 0.88)
+ *   - +3σ  steel blue   (opacity 0.88)
  *
  * This matches the published convention from Silvestros et al., J. Orthop. Res. 2024.
  *
- * PC1 overlay is visible by default; PC2 and PC3 start hidden — unhide them in the
- * ScalismoUI tree to compare modes without visual clutter.
+ * Published anatomical interpretations (cross-checked from literature):
+ *   PC1 – overall size (Halloran JSES 2018, ~72% in N=110)
+ *   PC2 – coracoacromial arch rotation / superior-inferior scaling
+ *   PC3 – acromion shape (Bigliani type axis)
+ *   PC4 – glenoid version / scapular body curvature
+ *   PC5 – acromion spine WIDTH and elongation; +3σ = wider/longer spine,
+ *          −3σ = narrower/shorter spine with less-curved, flatter acromion
+ *          (Scapula SSM construction, ResearchGate 2014; Springer 2025)
+ *
+ * PC1 and PC5 start visible by default; PC2/3/4 start hidden — unhide in
+ * the ScalismoUI tree to compare modes without visual clutter.
  *
  * Requires: Stage2ReferenceRefinement to have completed (final_*_fit.stl + reference_mean_shape.stl).
  * Run: sbt "runMain scapula.ViewModeShapes"
  */
 object ViewModeShapes {
 
-  private val numModes   = 3
+  private val numModes   = 5   // PC1 – PC5
   private val sdExtreme  = 3.0
 
   // Colours matching JOR 2024 exactly
   private val colorNeg  = new Color(204,  60,  60) // coral red   – −3σ
   private val colorMean = new Color( 45,  45,  45) // charcoal    – mean
   private val colorPos  = new Color( 90, 150, 215) // steel blue  – +3σ
-  private val opacity   = 0.70f
+  private val opacity   = 0.88f  // raised for maximum visibility
 
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
@@ -118,14 +127,15 @@ object ViewModeShapes {
       mView.color    = colorMean; mView.opacity     = opacity
       posView.color  = colorPos;  posView.opacity   = opacity
 
-      // Hide PC2+ by default so the scene starts clean
-      if (k > 0) {
+      // PC1 and PC5 start visible; PC2/3/4 start hidden to keep the scene clean
+      val visibleByDefault = k == 0 || k == 4
+      if (!visibleByDefault) {
         negView.opacity  = 0.0f
         mView.opacity    = 0.0f
         posView.opacity  = 0.0f
         println(s"Group '$name'  [hidden — toggle in ScalismoUI tree]")
       } else {
-        println(s"Group '$name'  [visible by default]")
+        println(s"Group '$name'  [VISIBLE by default]")
       }
     }
 
