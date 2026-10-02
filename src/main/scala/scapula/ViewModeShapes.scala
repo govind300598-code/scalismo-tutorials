@@ -134,7 +134,7 @@ object ViewModeShapes {
     (0 until math.min(numModes, pcaModel.rank)).foreach { k =>
       val pct    = variance(k) / totalVar * 100.0
       val cumPct = variance.take(k + 1).sum / totalVar * 100.0
-      val name   = f"PC${k+1} overlay (−${sdExtreme.toInt}σ / Mean / +${sdExtreme.toInt}σ)  " +
+      val name   = f"Mode ${k+1} (−${sdExtreme.toInt}σ / Mean / +${sdExtreme.toInt}σ)  " +
         f"${pct}%.1f%% var  cumul ${cumPct}%.1f%%"
 
       val group = ui.createGroup(name)
@@ -145,9 +145,9 @@ object ViewModeShapes {
         pcaModel.instance(c)
       }
 
-      val negView  = ui.show(group, instance(-sdExtreme), s"PC${k+1}_neg${sdExtreme.toInt}sd")
-      val mView    = ui.show(group, meanMesh,              s"PC${k+1}_mean")
-      val posView  = ui.show(group, instance( sdExtreme), s"PC${k+1}_pos${sdExtreme.toInt}sd")
+      val negView  = ui.show(group, instance(-sdExtreme), s"Mode${k+1}_neg${sdExtreme.toInt}sd")
+      val mView    = ui.show(group, meanMesh,              s"Mode${k+1}_mean")
+      val posView  = ui.show(group, instance( sdExtreme), s"Mode${k+1}_pos${sdExtreme.toInt}sd")
 
       negView.color  = colorNeg;  negView.opacity  = opacity
       mView.color    = colorMean; mView.opacity     = opacity
