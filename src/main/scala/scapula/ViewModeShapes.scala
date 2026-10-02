@@ -32,12 +32,15 @@ object ViewModeShapes {
   // Extremes in units of standard deviations
   private val sdExtreme = 3.0
 
-  private val colorNeg  = new Color( 52, 152, 219) // blue   – negative extreme  (−3σ)
-  private val colorMean = new Color(200, 200, 200) // light grey – mean shape
-  private val colorPos  = new Color(231,  76,  60) // red    – positive extreme  (+3σ)
+  // Colours matching JOR 2024 (Silvestros et al.) exactly:
+  //   −3 SD → coral-red, Mean → dark charcoal, +3 SD → steel-blue
+  // All three at the same opacity so overlap areas show blended colour, exactly as in the published figure.
+  private val colorNeg  = new Color(204,  60,  60) // coral red  – −3σ
+  private val colorMean = new Color( 45,  45,  45) // charcoal   – mean
+  private val colorPos  = new Color( 90, 150, 215) // steel blue – +3σ
 
-  private val opacityExtreme = 1.0f
-  private val opacityMean    = 0.35f
+  private val opacityExtreme = 0.70f
+  private val opacityMean    = 0.70f
 
   def main(args: Array[String]): Unit = {
     scalismo.initialize()
@@ -102,14 +105,15 @@ object ViewModeShapes {
 
     println(
       s"""
-         |Legend:
-         |  Blue  = −${sdExtreme.toInt}σ  (solid)
-         |  Grey  = Mean  (${(opacityMean * 100).toInt}% transparent)
-         |  Red   = +${sdExtreme.toInt}σ  (solid)
+         |Legend  (matches JOR 2024 / Silvestros et al. colour convention):
+         |  Red        = −${sdExtreme.toInt}σ  (opacity ${(opacityExtreme * 100).toInt}%)
+         |  Charcoal   = Mean   (opacity ${(opacityMean * 100).toInt}%)
+         |  Steel blue = +${sdExtreme.toInt}σ  (opacity ${(opacityExtreme * 100).toInt}%)
          |
+         |All three shapes overlap in one view; blended colour shows where shapes diverge.
          |PC1 overlay is visible by default.
          |Unhide PC2 / PC3 groups in the ScalismoUI tree to compare modes.
-         |Use the Appearance > Opacity slider to adjust transparency per mesh.
+         |Use Appearance > Opacity to fine-tune transparency per mesh.
          |""".stripMargin)
   }
 }
