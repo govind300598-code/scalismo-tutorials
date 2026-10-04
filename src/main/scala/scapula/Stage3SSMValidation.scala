@@ -71,7 +71,7 @@ object Stage3SSMValidation {
     println(f"paired group     : N=${paired.length}")
     println()
 
-    val line = "=" * 72
+    val line = "=".repeat(72)
     println(line)
     val results = Seq(
       "combined"  -> combined,
@@ -85,7 +85,7 @@ object Stage3SSMValidation {
 
     println(line)
     println(f"${"GROUP"}%-12s  ${"N"}%4s  ${"RANK"}%5s  ${"90%"}%6s  ${"95%"}%6s  ${"Gen@rank(mm)"}%14s  ${"Spec@rank(mm)"}%14s")
-    println("-" * 72)
+    println("-".repeat(72))
     results.foreach { r =>
       println(f"${r.name}%-12s  ${r.n}%4d  ${r.rank}%5d  ${r.modes90}%6d  ${r.modes95}%6d  ${r.genAtRank}%14.3f  ${r.specAtRank}%14.3f")
     }
