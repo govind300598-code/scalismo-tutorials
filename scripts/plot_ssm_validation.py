@@ -46,11 +46,15 @@ import matplotlib.gridspec as gridspec
 # Colour / style constants
 # ---------------------------------------------------------------------------
 STYLE = {
+    "combined":  dict(color="#238b45", ls="-",  lw=2.2, marker="D", ms=4,
+                      label="Combined (N=99)"),
     "hillsachs": dict(color="#2171b5", ls="-",  lw=2.0, marker="o", ms=4,
                       label="Hill-Sachs (N=49)"),
     "paired":    dict(color="#cb181d", ls="--", lw=2.0, marker="s", ms=4,
                       label="Paired controls (N=50)"),
 }
+GROUPS_PER_GROUP   = ("hillsachs", "paired")
+GROUPS_COMBINED    = ("combined",)
 ANNOT_KW = dict(fontsize=8, ha="left", va="bottom",
                 xytext=(4, 4), textcoords="offset points")
 
@@ -76,169 +80,153 @@ def load_metric(group: str, metric: str):
     return rows
 
 # ---------------------------------------------------------------------------
-# Build figure
+# Build figure A – combined model only (3 panels × 1 col)
 # ---------------------------------------------------------------------------
-fig = plt.figure(figsize=(13, 11))
-fig.suptitle("SSM Validation  –  Scapula Dataset (99 specimens, outliers excluded)",
-             fontsize=13, fontweight="bold", y=0.98)
+fig = plt.figure(figsize=(7, 14))
+fig.suptitle("SSM Validation  –  Combined (N=99, outliers excluded)",
+             fontsize=12, fontweight="bold", y=0.99)
+fig.subplots_adjust(hspace=0.4, top=0.96, bottom=0.06)
 
-gs = gridspec.GridSpec(3, 2, figure=fig,
-                       hspace=0.45, wspace=0.35,
-                       left=0.08, right=0.97, top=0.93, bottom=0.07)
-
-# ----- helper: annotate a horizontal threshold line -----
-def annotate_thresh(ax, rows, col_x, col_y, thresh, fmt_y, color, prefix=""):
-    xs = [r[col_x] for r in rows]
-    ys = [r[col_y] for r in rows]
-    # find first x where y crosses threshold
-    for x, y in zip(xs, ys):
-        if y >= thresh:
-            ax.axhline(thresh, color=color, lw=0.8, ls=":", alpha=0.6)
-            ax.annotate(f"{prefix}{thresh:.0f}% → {x:.0f} modes",
+# ----- helpers -----
+def annotate_thresh(ax, rows, col_x, col_y, thresh, color):
+    for r in rows:
+        if r[col_y] >= thresh:
+            x = r[col_x]
+            ax.axhline(thresh, color=color, lw=0.8, ls=":", alpha=0.5)
+            ax.annotate(f"{thresh:.0f}% → {x:.0f} modes",
                         xy=(x, thresh), color=color, **ANNOT_KW)
             break
 
-def annotate_val(ax, rows, col_x, col_y, color, fmt=".2f"):
+def annotate_val(ax, rows, col_x, col_y, color):
     last = rows[-1]
-    ax.annotate(f"{last[col_y]:{fmt}} mm",
+    ax.annotate(f"{last[col_y]:.2f} mm",
                 xy=(last[col_x], last[col_y]),
                 color=color, **ANNOT_KW)
 
-# ---------------------------------------------------------------------------
-# Panel 1 – COMPACTNESS  (left column = hillsachs, right = both combined)
-# ---------------------------------------------------------------------------
-ax_comp_hs  = fig.add_subplot(gs[0, 0])
-ax_comp_pa  = fig.add_subplot(gs[0, 1], sharey=ax_comp_hs)
+ax_comp  = fig.add_subplot(3, 1, 1)
+ax_gen   = fig.add_subplot(3, 1, 2)
+ax_spec  = fig.add_subplot(3, 1, 3)
 
-for ax, group in [(ax_comp_hs, "hillsachs"), (ax_comp_pa, "paired")]:
+for group in ("combined",):
+    sty = STYLE[group]
+
     rows = load_metric(group, "compactness")
-    if rows is None:
-        continue
-    xs = [r["modes"] for r in rows]
-    ys = [r["cumulative_variance_pct"] for r in rows]
-    sty = STYLE[group]
-    ax.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
-            marker=sty["marker"], ms=sty["ms"], markevery=max(1, len(xs)//12),
-            label=sty["label"])
-    annotate_thresh(ax, rows, "modes", "cumulative_variance_pct", 90,
-                    ".1f", sty["color"])
-    annotate_thresh(ax, rows, "modes", "cumulative_variance_pct", 95,
-                    ".1f", sty["color"])
-    ax.set_xlabel("Number of modes", fontsize=9)
-    ax.set_ylabel("Cumulative variance explained (%)", fontsize=9)
-    title_suffix = "Hill-Sachs" if group == "hillsachs" else "Paired controls"
-    ax.set_title(f"Compactness – {title_suffix}", fontsize=10)
-    ax.set_ylim(0, 102)
-    ax.yaxis.set_major_locator(mticker.MultipleLocator(10))
-    ax.legend(fontsize=8, loc="lower right")
-    ax.grid(True, alpha=0.25)
-
-# ---------------------------------------------------------------------------
-# Panel 2 – GENERALIZATION
-# ---------------------------------------------------------------------------
-ax_gen_hs = fig.add_subplot(gs[1, 0])
-ax_gen_pa = fig.add_subplot(gs[1, 1])
-
-for ax, group in [(ax_gen_hs, "hillsachs"), (ax_gen_pa, "paired")]:
-    rows = load_metric(group, "generalization")
-    if rows is None:
-        continue
-    xs = [r["modes"] for r in rows]
-    ys = [r["mean_rms_error_mm"] for r in rows]
-    sty = STYLE[group]
-    ax.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
-            marker=sty["marker"], ms=sty["ms"], markevery=max(1, len(xs)//12),
-            label=sty["label"])
-    annotate_val(ax, rows, "modes", "mean_rms_error_mm", sty["color"])
-    ax.set_xlabel("Number of modes", fontsize=9)
-    ax.set_ylabel("Mean RMS error (mm)", fontsize=9)
-    title_suffix = "Hill-Sachs" if group == "hillsachs" else "Paired controls"
-    ax.set_title(f"Generalization – {title_suffix}", fontsize=10)
-    ax.legend(fontsize=8, loc="upper right")
-    ax.grid(True, alpha=0.25)
-
-# ---------------------------------------------------------------------------
-# Panel 3 – SPECIFICITY
-# ---------------------------------------------------------------------------
-ax_spec_hs = fig.add_subplot(gs[2, 0])
-ax_spec_pa = fig.add_subplot(gs[2, 1])
-
-for ax, group in [(ax_spec_hs, "hillsachs"), (ax_spec_pa, "paired")]:
-    rows = load_metric(group, "specificity")
-    if rows is None:
-        continue
-    xs = [r["modes"] for r in rows]
-    ys = [r["mean_min_rms_mm"] for r in rows]
-    sty = STYLE[group]
-    ax.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
-            marker=sty["marker"], ms=sty["ms"],
-            label=sty["label"])
-    annotate_val(ax, rows, "modes", "mean_min_rms_mm", sty["color"])
-    ax.set_xlabel("Number of modes used for sampling", fontsize=9)
-    ax.set_ylabel("Mean min RMS dist. to training (mm)", fontsize=9)
-    title_suffix = "Hill-Sachs" if group == "hillsachs" else "Paired controls"
-    ax.set_title(f"Specificity (100 K samples) – {title_suffix}", fontsize=10)
-    ax.legend(fontsize=8, loc="upper left")
-    ax.grid(True, alpha=0.25)
-
-# ---------------------------------------------------------------------------
-# Save 6-panel figure
-# ---------------------------------------------------------------------------
-for ext in ("png", "svg"):
-    save_path = out_dir / f"ssm_validation_plots.{ext}"
-    fig.savefig(save_path, dpi=150 if ext == "png" else None, bbox_inches="tight")
-    print(f"Saved: {save_path}")
-
-# ---------------------------------------------------------------------------
-# Second figure – combined overlay (1 col × 3 rows, both groups per panel)
-# ---------------------------------------------------------------------------
-fig2, axes2 = plt.subplots(3, 1, figsize=(7, 14))
-fig2.suptitle("SSM Validation – Hillsachs vs Paired Controls",
-              fontsize=12, fontweight="bold", y=0.99)
-fig2.subplots_adjust(hspace=0.4, top=0.96, bottom=0.06)
-
-METRIC_META = [
-    ("compactness",    "cumulative_variance_pct",
-     "Compactness",    "Cumulative variance explained (%)", (0, 102)),
-    ("generalization", "mean_rms_error_mm",
-     "Generalization", "Mean RMS reconstruction error (mm)", None),
-    ("specificity",    "mean_min_rms_mm",
-     "Specificity (100 K samples)", "Mean min RMS dist. to training (mm)", None),
-]
-
-for ax, (metric, col_y, title, ylabel, ylim) in zip(axes2, METRIC_META):
-    for group in ("hillsachs", "paired"):
-        rows = load_metric(group, metric)
-        if rows is None:
-            continue
+    if rows:
         xs = [r["modes"] for r in rows]
-        ys = [r[col_y] for r in rows]
-        sty = STYLE[group]
-        ax.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
-                marker=sty["marker"], ms=sty["ms"],
-                markevery=max(1, len(xs)//12),
-                label=sty["label"])
-        if metric == "compactness":
-            for thresh in (90, 95):
-                for x, y in zip(xs, ys):
-                    if y >= thresh:
-                        ax.axvline(x, color=sty["color"], lw=0.7, ls=":", alpha=0.5)
-                        ax.text(x + 0.3, thresh - 4,
-                                f"{thresh}%→{x:.0f}", fontsize=7, color=sty["color"])
-                        break
+        ys = [r["cumulative_variance_pct"] for r in rows]
+        ax_comp.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                     marker=sty["marker"], ms=sty["ms"],
+                     markevery=max(1, len(xs)//15), label=sty["label"])
+        annotate_thresh(ax_comp, rows, "modes", "cumulative_variance_pct", 90, sty["color"])
+        annotate_thresh(ax_comp, rows, "modes", "cumulative_variance_pct", 95, sty["color"])
 
-    ax.set_xlabel("Number of modes", fontsize=9)
-    ax.set_ylabel(ylabel, fontsize=9)
-    ax.set_title(title, fontsize=10, fontweight="bold")
-    if ylim:
-        ax.set_ylim(*ylim)
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.25)
+    rows = load_metric(group, "generalization")
+    if rows:
+        xs = [r["modes"] for r in rows]
+        ys = [r["mean_rms_error_mm"] for r in rows]
+        ax_gen.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                    marker=sty["marker"], ms=sty["ms"],
+                    markevery=max(1, len(xs)//15), label=sty["label"])
+        annotate_val(ax_gen, rows, "modes", "mean_rms_error_mm", sty["color"])
+
+    rows = load_metric(group, "specificity")
+    if rows:
+        xs = [r["modes"] for r in rows]
+        ys = [r["mean_min_rms_mm"] for r in rows]
+        ax_spec.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                     marker=sty["marker"], ms=sty["ms"], label=sty["label"])
+        annotate_val(ax_spec, rows, "modes", "mean_min_rms_mm", sty["color"])
+        n_spec = 100_000
+        ax_spec.set_title(f"Specificity ({n_spec:,} samples)", fontsize=10, fontweight="bold")
+
+ax_comp.set_ylabel("Cumulative variance (%)", fontsize=9)
+ax_comp.set_xlabel("Number of modes", fontsize=9)
+ax_comp.set_title("Compactness", fontsize=10, fontweight="bold")
+ax_comp.set_ylim(0, 102)
+ax_comp.yaxis.set_major_locator(mticker.MultipleLocator(10))
+ax_comp.legend(fontsize=8, loc="lower right"); ax_comp.grid(True, alpha=0.25)
+
+ax_gen.set_ylabel("Mean RMS reconstruction error (mm)", fontsize=9)
+ax_gen.set_xlabel("Number of modes", fontsize=9)
+ax_gen.set_title("Generalization", fontsize=10, fontweight="bold")
+ax_gen.legend(fontsize=8, loc="upper right"); ax_gen.grid(True, alpha=0.25)
+
+ax_spec.set_ylabel("Mean min RMS dist. to training set (mm)", fontsize=9)
+ax_spec.set_xlabel("Number of modes used for sampling", fontsize=9)
+ax_spec.legend(fontsize=8, loc="upper left"); ax_spec.grid(True, alpha=0.25)
+
+# ---------------------------------------------------------------------------
+# Build figure B – group comparison (3 rows × 2 cols)
+# ---------------------------------------------------------------------------
+gs = gridspec.GridSpec(3, 2, figure=plt.figure(figsize=(13, 11)),
+                       hspace=0.45, wspace=0.35,
+                       left=0.08, right=0.97, top=0.93, bottom=0.07)
+fig_grp = gs.figure
+fig_grp.suptitle("SSM Validation  –  Hill-Sachs vs Paired Controls",
+                 fontsize=13, fontweight="bold", y=0.98)
+
+PANEL_GROUPS = [("hillsachs", "Hill-Sachs"), ("paired", "Paired controls")]
+
+for col, (group, gtitle) in enumerate(PANEL_GROUPS):
+    sty = STYLE[group]
+
+    ax_c = fig_grp.add_subplot(gs[0, col])
+    rows = load_metric(group, "compactness")
+    if rows:
+        xs = [r["modes"] for r in rows]
+        ys = [r["cumulative_variance_pct"] for r in rows]
+        ax_c.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                  marker=sty["marker"], ms=sty["ms"],
+                  markevery=max(1, len(xs)//12), label=sty["label"])
+        annotate_thresh(ax_c, rows, "modes", "cumulative_variance_pct", 90, sty["color"])
+        annotate_thresh(ax_c, rows, "modes", "cumulative_variance_pct", 95, sty["color"])
+    ax_c.set_xlabel("Number of modes", fontsize=9)
+    ax_c.set_ylabel("Cumulative variance (%)", fontsize=9)
+    ax_c.set_title(f"Compactness – {gtitle}", fontsize=10)
+    ax_c.set_ylim(0, 102)
+    ax_c.yaxis.set_major_locator(mticker.MultipleLocator(10))
+    ax_c.legend(fontsize=8, loc="lower right"); ax_c.grid(True, alpha=0.25)
+
+    ax_g = fig_grp.add_subplot(gs[1, col])
+    rows = load_metric(group, "generalization")
+    if rows:
+        xs = [r["modes"] for r in rows]
+        ys = [r["mean_rms_error_mm"] for r in rows]
+        ax_g.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                  marker=sty["marker"], ms=sty["ms"],
+                  markevery=max(1, len(xs)//12), label=sty["label"])
+        annotate_val(ax_g, rows, "modes", "mean_rms_error_mm", sty["color"])
+    ax_g.set_xlabel("Number of modes", fontsize=9)
+    ax_g.set_ylabel("Mean RMS error (mm)", fontsize=9)
+    ax_g.set_title(f"Generalization – {gtitle}", fontsize=10)
+    ax_g.legend(fontsize=8, loc="upper right"); ax_g.grid(True, alpha=0.25)
+
+    ax_s = fig_grp.add_subplot(gs[2, col])
+    rows = load_metric(group, "specificity")
+    if rows:
+        xs = [r["modes"] for r in rows]
+        ys = [r["mean_min_rms_mm"] for r in rows]
+        ax_s.plot(xs, ys, color=sty["color"], lw=sty["lw"], ls=sty["ls"],
+                  marker=sty["marker"], ms=sty["ms"], label=sty["label"])
+        annotate_val(ax_s, rows, "modes", "mean_min_rms_mm", sty["color"])
+    ax_s.set_xlabel("Number of modes used for sampling", fontsize=9)
+    ax_s.set_ylabel("Mean min RMS dist. (mm)", fontsize=9)
+    ax_s.set_title(f"Specificity (100 K) – {gtitle}", fontsize=10)
+    ax_s.legend(fontsize=8, loc="upper left"); ax_s.grid(True, alpha=0.25)
+
+# ---------------------------------------------------------------------------
+# Save figures
+# ---------------------------------------------------------------------------
+for ext in ("png", "svg"):
+    p = out_dir / f"ssm_validation_combined99.{ext}"
+    fig.savefig(p, dpi=150 if ext == "png" else None, bbox_inches="tight")
+    print(f"Saved: {p}")
 
 for ext in ("png", "svg"):
-    save_path = out_dir / f"ssm_validation_combined.{ext}"
-    fig2.savefig(save_path, dpi=150 if ext == "png" else None, bbox_inches="tight")
-    print(f"Saved: {save_path}")
+    p = out_dir / f"ssm_validation_groups.{ext}"
+    fig_grp.savefig(p, dpi=150 if ext == "png" else None, bbox_inches="tight")
+    print(f"Saved: {p}")
+
 
 # ---------------------------------------------------------------------------
 # Variance scree plots

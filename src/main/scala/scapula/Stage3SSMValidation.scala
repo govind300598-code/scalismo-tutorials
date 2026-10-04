@@ -60,22 +60,27 @@ object Stage3SSMValidation {
 
     println(f"Points per mesh  : ${allShapes.head._2.pointSet.numberOfPoints}")
 
+    val combined  = allShapes.map(_._2)
     val hillsachs = allShapes.filter(_._1.startsWith("hill_sachs")).map(_._2)
     val paired    = allShapes.filter { case (id, _) =>
       id.startsWith("paired_scapula") || id.startsWith("paired_shoulder")
     }.map(_._2)
 
+    println(f"combined         : N=${combined.length}")
     println(f"hillsachs group  : N=${hillsachs.length}")
     println(f"paired group     : N=${paired.length}")
     println()
 
     val line = "=" * 72
     println(line)
-    val results = Seq("hillsachs" -> hillsachs, "paired" -> paired).map {
-      case (name, shapes) =>
-        val row = validateGroup(name, shapes, outDir, nSpecSamples = 100_000)
-        println()
-        row
+    val results = Seq(
+      "combined"  -> combined,
+      "hillsachs" -> hillsachs,
+      "paired"    -> paired
+    ).map { case (name, shapes) =>
+      val row = validateGroup(name, shapes, outDir, nSpecSamples = 100_000)
+      println()
+      row
     }
 
     println(line)
